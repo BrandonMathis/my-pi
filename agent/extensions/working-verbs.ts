@@ -1,8 +1,30 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 export const ROTATION_INTERVAL_MS = 8000;
+export const SHINE_INTERVAL_MS = 100;
 export const APPEND_ELLIPSIS = true;
 export const MESSAGE_SUFFIX = "...";
+
+const RESET_FG = "\x1b[39m";
+const GRADIENT_STRETCH = 2;
+const DRACULA_PURPLE_GRADIENT = [
+	"\x1b[38;2;122;96;172m",
+	"\x1b[38;2;128;100;180m",
+	"\x1b[38;2;134;104;188m",
+	"\x1b[38;2;140;108;196m",
+	"\x1b[38;2;148;114;204m",
+	"\x1b[38;2;156;120;212m",
+	"\x1b[38;2;164;126;220m",
+	"\x1b[38;2;172;133;228m",
+	"\x1b[38;2;164;126;220m",
+	"\x1b[38;2;156;120;212m",
+	"\x1b[38;2;148;114;204m",
+	"\x1b[38;2;140;108;196m",
+	"\x1b[38;2;134;104;188m",
+	"\x1b[38;2;128;100;180m",
+] as const;
+const DRACULA_GREEN = "\x1b[38;2;80;250;123m";
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 const FIXED_PHRASES_RAW = [
 	"Proving P = NP",
@@ -151,6 +173,33 @@ const FIXED_PHRASES_RAW = [
   "Reheating logs",
 ] as const;
 
+function colorize(text: string, color: string): string {
+	return `${color}${text}${RESET_FG}`;
+}
+
+function renderScrollingGradient(message: string, offset: number): string {
+	const chars = [...message];
+	if (chars.length === 0) return message;
+
+	return chars
+		.map((char, index) => {
+			if (char === " ") return char;
+			const stretchedIndex = Math.floor((index + offset) / GRADIENT_STRETCH);
+			const paletteIndex = stretchedIndex % DRACULA_PURPLE_GRADIENT.length;
+			const color = DRACULA_PURPLE_GRADIENT[paletteIndex] ?? DRACULA_PURPLE_GRADIENT[0]!;
+			return colorize(char, color);
+		})
+		.join("");
+}
+
+function applyDraculaGreenSpinner(ctx: ExtensionContext): void {
+	if (!ctx.hasUI) return;
+	ctx.ui.setWorkingIndicator({
+		frames: SPINNER_FRAMES.map((frame) => colorize(frame, DRACULA_GREEN)),
+		intervalMs: 80,
+	});
+}
+
 function normalizePhrase(phrase: string): string {
 	const trimmed = phrase.trim();
 	if (!trimmed) return "";
@@ -218,15 +267,27 @@ function createFixedPhraseRotator(phrases: readonly string[]) {
 const phraseRotator = createFixedPhraseRotator(FIXED_PHRASES);
 
 let rotationTimer: ReturnType<typeof setInterval> | undefined;
+let shineTimer: ReturnType<typeof setInterval> | undefined;
+let currentMessage = formatWorkingMessage("Working");
+let shineOffset = 0;
+
+function renderWorkingMessage(ctx: ExtensionContext): void {
+	ctx.ui.setWorkingMessage(renderScrollingGradient(currentMessage, shineOffset));
+}
 
 function stopRotation(ctx?: ExtensionContext): void {
 	if (rotationTimer) {
 		clearInterval(rotationTimer);
 		rotationTimer = undefined;
 	}
+	if (shineTimer) {
+		clearInterval(shineTimer);
+		shineTimer = undefined;
+	}
 
 	if (ctx?.hasUI) {
 		ctx.ui.setWorkingMessage();
+		ctx.ui.setWorkingIndicator();
 	}
 }
 
@@ -236,9 +297,19 @@ function startRotation(ctx: ExtensionContext): void {
 
 	if (!ctx.hasUI) return;
 
-	ctx.ui.setWorkingMessage(phraseRotator.nextMessage());
+	applyDraculaGreenSpinner(ctx);
+	currentMessage = phraseRotator.nextMessage();
+	shineOffset = 0;
+	renderWorkingMessage(ctx);
+
+	shineTimer = setInterval(() => {
+		shineOffset = (shineOffset + 1) % (DRACULA_PURPLE_GRADIENT.length * GRADIENT_STRETCH);
+		renderWorkingMessage(ctx);
+	}, SHINE_INTERVAL_MS);
+
 	rotationTimer = setInterval(() => {
-		ctx.ui.setWorkingMessage(phraseRotator.nextMessage());
+		currentMessage = phraseRotator.nextMessage();
+		renderWorkingMessage(ctx);
 	}, ROTATION_INTERVAL_MS);
 }
 
