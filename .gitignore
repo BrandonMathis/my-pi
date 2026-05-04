@@ -1,26 +1,11 @@
-# macOS / editor noise
-.DS_Store
-*.swp
-*.swo
+# Ignore everything by default
+/*
 
-# Logs and temp artifacts
-*.log
-tmp/
-temp/
+# Keep repository ignore rules tracked
+!.gitignore
 
-# Pi local authentication and secrets
-agent/auth.json
-agent/auth.oauth.json
-*.pem
-*.key
-*.p12
-*.pfx
-.env
-.env.*
-
-# Pi local runtime data (personal/local machine state)
-agent/sessions/
-agent/cache/
-agent/.extmgr-cache/
-agent/run-history.jsonl
-agent/git/
+# Keep only agent extensions tracked
+!agent/
+agent/*
+!agent/extensions/
+!agent/extensions/**
