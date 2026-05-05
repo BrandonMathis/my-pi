@@ -1,28 +1,31 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 export const ROTATION_INTERVAL_MS = 8000;
-export const SHINE_INTERVAL_MS = 100;
+export const SHINE_INTERVAL_MS = 60;
+export const SHINE_STEP = 1;
+export const SHINE_PAUSE_MS = 900;
+export const SHINE_TRAIL_RADIUS = 3;
 export const APPEND_ELLIPSIS = true;
 export const MESSAGE_SUFFIX = "...";
 
 const RESET_FG = "\x1b[39m";
-const GRADIENT_STRETCH = 2;
-const DRACULA_PURPLE_GRADIENT = [
-	"\x1b[38;2;151;118;199m",
-	"\x1b[38;2;159;123;209m",
-	"\x1b[38;2;166;129;219m",
-	"\x1b[38;2;174;135;229m",
-	"\x1b[38;2;181;141;239m",
+const BASE_PURPLE = "\x1b[38;2;151;118;199m";
+const SHINE_DISTANCE_COLORS = [
+	"\x1b[38;2;205;162;255m",
+	"\x1b[38;2;197;153;252m",
 	"\x1b[38;2;189;147;249m",
-	"\x1b[38;2;181;141;239m",
 	"\x1b[38;2;174;135;229m",
-	"\x1b[38;2;166;129;219m",
-	"\x1b[38;2;159;123;209m",
 ] as const;
+const SHINE_PAUSE_FRAMES = Math.ceil(SHINE_PAUSE_MS / SHINE_INTERVAL_MS);
 const DRACULA_GREEN = "\x1b[38;2;80;250;123m";
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 const FIXED_PHRASES_RAW = [
+	"Codemaxxxing",
+	"Vibemaxxxing",
+	"Bugmaxxxing",
+	"Testmaxxxing",
+	"Tokenmaxxxing",
 	"Proving P = NP",
 	"Computing 6 x 9",
 	"Computing 6 x 7",
@@ -173,16 +176,20 @@ function colorize(text: string, color: string): string {
 	return `${color}${text}${RESET_FG}`;
 }
 
-function renderScrollingGradient(message: string, offset: number): string {
+type ShinePhase = "forward" | "pause-after-forward" | "reverse" | "pause-after-reverse";
+
+function colorForShineDistance(distance: number): string {
+	return SHINE_DISTANCE_COLORS[distance] ?? BASE_PURPLE;
+}
+
+function renderShineGradient(message: string, peakPosition?: number): string {
 	const chars = [...message];
 	if (chars.length === 0) return message;
 
 	return chars
 		.map((char, index) => {
 			if (char === " ") return char;
-			const stretchedIndex = Math.floor((index + offset) / GRADIENT_STRETCH);
-			const paletteIndex = stretchedIndex % DRACULA_PURPLE_GRADIENT.length;
-			const color = DRACULA_PURPLE_GRADIENT[paletteIndex] ?? DRACULA_PURPLE_GRADIENT[0]!;
+			const color = peakPosition === undefined ? BASE_PURPLE : colorForShineDistance(Math.abs(index - peakPosition));
 			return colorize(char, color);
 		})
 		.join("");
@@ -265,10 +272,66 @@ const phraseRotator = createFixedPhraseRotator(FIXED_PHRASES);
 let rotationTimer: ReturnType<typeof setInterval> | undefined;
 let shineTimer: ReturnType<typeof setInterval> | undefined;
 let currentMessage = formatWorkingMessage("Working");
-let shineOffset = 0;
+let shinePhase: ShinePhase = "forward";
+let shinePosition = -SHINE_TRAIL_RADIUS;
+let pauseFrame = 0;
+
+function getShineBounds(message: string): { min: number; max: number } {
+	const lastCharacterIndex = Math.max(0, [...message].length - 1);
+	return {
+		min: -SHINE_TRAIL_RADIUS,
+		max: lastCharacterIndex + SHINE_TRAIL_RADIUS,
+	};
+}
+
+function resetShine(message: string): void {
+	const { min } = getShineBounds(message);
+	shinePhase = "forward";
+	shinePosition = min;
+	pauseFrame = 0;
+}
+
+function getCurrentShinePeak(): number | undefined {
+	return shinePhase === "forward" || shinePhase === "reverse" ? shinePosition : undefined;
+}
+
+function advanceShine(message: string): void {
+	const { min, max } = getShineBounds(message);
+
+	switch (shinePhase) {
+		case "forward":
+			shinePosition += SHINE_STEP;
+			if (shinePosition > max) {
+				shinePhase = "pause-after-forward";
+				pauseFrame = 0;
+			}
+			break;
+		case "pause-after-forward":
+			pauseFrame += 1;
+			if (pauseFrame >= SHINE_PAUSE_FRAMES) {
+				shinePhase = "reverse";
+				shinePosition = max;
+			}
+			break;
+		case "reverse":
+			shinePosition -= SHINE_STEP;
+			if (shinePosition < min) {
+				shinePhase = "pause-after-reverse";
+				pauseFrame = 0;
+			}
+			break;
+		case "pause-after-reverse":
+			pauseFrame += 1;
+			if (pauseFrame >= SHINE_PAUSE_FRAMES) {
+				shinePhase = "forward";
+				shinePosition = min;
+			}
+			break;
+	}
+}
 
 function renderWorkingMessage(ctx: ExtensionContext): void {
-	ctx.ui.setWorkingMessage(renderScrollingGradient(currentMessage, shineOffset));
+	ctx.ui.setWorkingMessage(renderShineGradient(currentMessage, getCurrentShinePeak()));
 }
 
 function stopRotation(ctx?: ExtensionContext): void {
@@ -295,16 +358,17 @@ function startRotation(ctx: ExtensionContext): void {
 
 	applyDraculaGreenSpinner(ctx);
 	currentMessage = phraseRotator.nextMessage();
-	shineOffset = 0;
+	resetShine(currentMessage);
 	renderWorkingMessage(ctx);
 
 	shineTimer = setInterval(() => {
-		shineOffset = (shineOffset + 1) % (DRACULA_PURPLE_GRADIENT.length * GRADIENT_STRETCH);
+		advanceShine(currentMessage);
 		renderWorkingMessage(ctx);
 	}, SHINE_INTERVAL_MS);
 
 	rotationTimer = setInterval(() => {
 		currentMessage = phraseRotator.nextMessage();
+		resetShine(currentMessage);
 		renderWorkingMessage(ctx);
 	}, ROTATION_INTERVAL_MS);
 }
