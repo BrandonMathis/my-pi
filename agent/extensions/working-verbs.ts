@@ -31,7 +31,7 @@ const FIXED_PHRASES_RAW = [
 	"Computing 6 x 7",
 	"Mining crypto",
 	"Dividing by 0",
-	"Initialising killbot",
+	"Initializing killbot",
 	"Downloading RAM",
   "Hacking the mainframe",
   "Rebooting the matrix",
