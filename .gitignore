@@ -9,3 +9,7 @@
 agent/*
 !agent/extensions/
 !agent/extensions/**
+
+# Standalone local extension repos/backups
+agent/extensions/pi-working-phrase/
+agent/extensions/pi-working-phrase.backup-*/
