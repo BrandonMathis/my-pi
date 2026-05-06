@@ -6,6 +6,27 @@ Prepare `pi-working-phrase` for public release as a small Pi extension that cust
 
 The public docs should make the extension easy to install, easy to customize, and easy to maintain without expanding the feature scope beyond custom working statuses.
 
+## Implementation Status
+
+Initial public-release preparation was completed on 2026-05-06.
+
+Completed:
+
+- Required documentation: `README.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/configuration.md`, and `docs/release-checklist.md`.
+- Supplemental documentation: `docs/development.md`, `docs/troubleshooting.md`, and `docs/examples.md`.
+- Package metadata, package contents controls, TypeScript configuration, Prettier configuration, and `.editorconfig`.
+- Unit tests for phrase rotation, colors, shine rendering, and timer/controller behavior.
+- Jiti load smoke test.
+- GitHub Actions CI workflow.
+- Bug, documentation, feature request, and pull request templates.
+- Dependabot updates for npm dev dependencies and GitHub Actions.
+- Compatibility and non-interactive mode notes in the README.
+
+Deferred:
+
+- A real terminal screenshot or demo GIF should be captured after installing the standalone GitHub repository locally; `docs/assets/` is present for that asset.
+- CODEOWNERS can be added when there is more than one maintainer.
+
 ---
 
 ## Recommended Documentation Set
@@ -164,8 +185,8 @@ After editing config or phrases, run `/reload` in Pi.
 Point users to the two intended customization files:
 
 ```txt
-config.ts
-phrases.ts
+src/config.ts
+src/phrases.ts
 ```
 
 Show the minimal examples.
@@ -173,11 +194,7 @@ Show the minimal examples.
 #### Change phrases
 
 ```ts
-export const workingPhrases = [
-  "Reticulating splines",
-  "Consulting sacred texts",
-  "Shipping bugs",
-] as const;
+export const workingPhrases = ["Reticulating splines", "Consulting sacred texts", "Shipping bugs"] as const;
 ```
 
 #### Change phrase shuffle speed
@@ -206,20 +223,20 @@ shineFrameMs: 40,
 
 ### 8. Full configuration table
 
-Include a table matching `config.ts`.
+Include a table matching `src/config.ts`.
 
-| Option | Default | Description |
-| --- | ---: | --- |
-| `phrasesShuffleMs` | `8000` | Milliseconds between phrase changes. |
-| `shineFrameMs` | `60` | Milliseconds between shine animation frames. Lower is faster. |
-| `shinePauseMs` | `900` | Pause duration after a shine sweep finishes. |
-| `shineTrailRadius` | `3` | Number of characters affected around the shine peak. |
-| `shineStep` | `1` | Number of character positions advanced per frame. |
-| `baseColor` | `"#9776c7"` | Base text color used to derive the shine gradient. |
-| `spinnerColor` | `"#50fa7b"` | ANSI foreground color for spinner frames. |
-| `appendEllipsis` | `true` | Whether to append a suffix to phrases. |
-| `messageSuffix` | `"..."` | Suffix appended when `appendEllipsis` is enabled. |
-| `spinnerFrameMs` | `80` | Milliseconds between spinner animation frames. |
+| Option             |     Default | Description                                                   |
+| ------------------ | ----------: | ------------------------------------------------------------- |
+| `phrasesShuffleMs` |      `8000` | Milliseconds between phrase changes.                          |
+| `shineFrameMs`     |        `60` | Milliseconds between shine animation frames. Lower is faster. |
+| `shinePauseMs`     |       `900` | Pause duration after a shine sweep finishes.                  |
+| `shineTrailRadius` |         `3` | Number of characters affected around the shine peak.          |
+| `shineStep`        |         `1` | Number of character positions advanced per frame.             |
+| `baseColor`        | `"#9776c7"` | Base text color used to derive the shine gradient.            |
+| `spinnerColor`     | `"#50fa7b"` | ANSI foreground color for spinner frames.                     |
+| `appendEllipsis`   |      `true` | Whether to append a suffix to phrases.                        |
+| `messageSuffix`    |     `"..."` | Suffix appended when `appendEllipsis` is enabled.             |
+| `spinnerFrameMs`   |        `80` | Milliseconds between spinner animation frames.                |
 
 ### 9. How phrase rotation works
 
@@ -237,13 +254,17 @@ Document the current architecture:
 
 ```txt
 pi-working-phrase/
-├── index.ts             # Pi lifecycle hooks only
-├── config.ts            # User-editable settings
-├── phrases.ts           # User-editable phrase list
-├── colors.ts            # ANSI and hex color helpers
-├── shine.ts             # Shine animation state/rendering
-├── phrases-rotator.ts   # Phrase normalization and shuffling
-└── timers.ts            # Timer lifecycle and Pi UI updates
+├── src/
+│   ├── index.ts             # Pi lifecycle hooks only
+│   ├── config.ts            # User-editable settings
+│   ├── phrases.ts           # User-editable phrase list
+│   ├── colors.ts            # ANSI and hex color helpers
+│   ├── shine.ts             # Shine animation state/rendering
+│   ├── phrases-rotator.ts   # Phrase normalization and shuffling
+│   └── timers.ts            # Timer lifecycle and Pi UI updates
+├── tests/
+├── scripts/
+└── docs/
 ```
 
 ### 11. Troubleshooting summary
@@ -262,7 +283,7 @@ Common issues:
 Be explicit:
 
 ```md
-This extension intentionally does not provide slash commands, persisted settings, widgets, external config files, settings panels, or multiple themes. Configuration is done by editing `config.ts` and `phrases.ts`.
+This extension intentionally does not provide slash commands, persisted settings, widgets, external config files, settings panels, or multiple themes. Configuration is done by editing `src/config.ts` and `src/phrases.ts`.
 ```
 
 ### 13. Contributing link
@@ -295,7 +316,7 @@ Purpose: Give more detailed customization guidance than the README.
 Recommended sections:
 
 1. **Configuration overview**
-   - Users edit `config.ts` and `phrases.ts`
+   - Users edit `src/config.ts` and `src/phrases.ts`
    - Run `/reload` after changes
 
 2. **Phrase customization**
@@ -355,11 +376,11 @@ Recommended sections:
    - Confirm path:
 
 ```txt
-~/.pi/agent/extensions/pi-working-phrase/index.ts
+~/.pi/agent/extensions/pi-working-phrase/src/index.ts
 ```
 
-   - Run `/reload`
-   - Restart Pi if reload is not enough
+- Run `/reload`
+- Restart Pi if reload is not enough
 
 2. **Duplicate or conflicting status messages**
    - Remove older local extensions that call:
@@ -395,11 +416,11 @@ Recommended sections:
    - Symlink or copy into `~/.pi/agent/extensions/pi-working-phrase`
 
 2. **Architecture**
-   - `index.ts`: Pi lifecycle only
-   - `timers.ts`: Pi UI/timer coordination
-   - `phrases-rotator.ts`: pure phrase logic
-   - `shine.ts`: pure-ish animation renderer
-   - `colors.ts`: pure ANSI/color helpers
+   - `src/index.ts`: Pi lifecycle only
+   - `src/timers.ts`: Pi UI/timer coordination
+   - `src/phrases-rotator.ts`: pure phrase logic
+   - `src/shine.ts`: pure-ish animation renderer
+   - `src/colors.ts`: pure ANSI/color helpers
 
 3. **Testing strategy**
    - Unit tests for pure modules
@@ -441,16 +462,16 @@ Example low-motion preset:
 
 ```ts
 export const config = {
-  phrasesShuffleMs: 12000,
-  shineFrameMs: 120,
-  shinePauseMs: 1500,
-  shineTrailRadius: 2,
-  shineStep: 1,
-  baseColor: "#9776c7",
-  spinnerColor: "#50fa7b",
-  appendEllipsis: true,
-  messageSuffix: "...",
-  spinnerFrameMs: 120,
+	phrasesShuffleMs: 12000,
+	shineFrameMs: 120,
+	shinePauseMs: 1500,
+	shineTrailRadius: 2,
+	shineStep: 1,
+	baseColor: "#9776c7",
+	spinnerColor: "#50fa7b",
+	appendEllipsis: true,
+	messageSuffix: "...",
+	spinnerFrameMs: 120,
 } as const;
 ```
 
@@ -492,6 +513,7 @@ Initial version:
 ## [0.1.0] - YYYY-MM-DD
 
 ### Added
+
 - Shuffled working phrases.
 - Configurable phrase shuffle speed.
 - Animated shine gradient.
@@ -533,15 +555,15 @@ Recommended scripts:
 
 ```json
 {
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "smoke:load": "node scripts/smoke-load.mjs",
-    "pack:check": "npm pack --dry-run"
-  }
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"smoke:load": "node scripts/smoke-load.mjs",
+		"pack:check": "npm pack --dry-run"
+	}
 }
 ```
 
@@ -549,9 +571,9 @@ If publishing as a Pi package, include the correct `pi` metadata only after test
 
 ```json
 {
-  "pi": {
-    "extensions": ["./index.ts"]
-  }
+	"pi": {
+		"extensions": ["./src/index.ts"]
+	}
 }
 ```
 
@@ -608,7 +630,7 @@ Use fake timers and a fake `ExtensionContext`:
 
 ### 4. Add a Pi/Jiti load smoke test
 
-Create `scripts/smoke-load.mjs` that loads `index.ts` through the same TypeScript runtime style Pi uses, then asserts:
+Create `scripts/smoke-load.mjs` that loads `src/index.ts` through the same TypeScript runtime style Pi uses, then asserts:
 
 - Default export is a function
 - It registers `agent_start`, `agent_end`, and `session_shutdown`
@@ -696,13 +718,13 @@ Use one of:
 Recommended package contents:
 
 ```txt
-index.ts
-config.ts
-phrases.ts
-colors.ts
-shine.ts
-phrases-rotator.ts
-timers.ts
+src/index.ts
+src/config.ts
+src/phrases.ts
+src/colors.ts
+src/shine.ts
+src/phrases-rotator.ts
+src/timers.ts
 README.md
 LICENSE
 CHANGELOG.md
@@ -771,18 +793,18 @@ Manual QA should verify:
 
 Prioritize in this order:
 
-1. Add `README.md` with install, usage, configuration, and troubleshooting basics.
-2. Add `LICENSE`.
-3. Add `CHANGELOG.md` with initial version.
-4. Add `tsconfig.json` and `npm run typecheck`.
-5. Add unit tests for `phrases-rotator.ts`, `colors.ts`, and `shine.ts`.
-6. Add fake-timer tests for `timers.ts`.
-7. Add Jiti/Pi load smoke test.
-8. Add GitHub Actions CI.
-9. Add `CONTRIBUTING.md` and PR template.
-10. Add `docs/configuration.md` for deeper customization guidance.
-11. Add a demo GIF or screenshot.
-12. Add release checklist and package dry-run check.
+1. [x] Add `README.md` with install, usage, configuration, and troubleshooting basics.
+2. [x] Add `LICENSE`.
+3. [x] Add `CHANGELOG.md` with initial version.
+4. [x] Add `tsconfig.json` and `npm run typecheck`.
+5. [x] Add unit tests for `src/phrases-rotator.ts`, `src/colors.ts`, and `src/shine.ts`.
+6. [x] Add fake-timer tests for `src/timers.ts`.
+7. [x] Add Jiti/Pi load smoke test.
+8. [x] Add GitHub Actions CI.
+9. [x] Add `CONTRIBUTING.md` and PR template.
+10. [x] Add `docs/configuration.md` for deeper customization guidance.
+11. [ ] Add a demo GIF or screenshot after a real local terminal capture is available.
+12. [x] Add release checklist and package dry-run check.
 
 ---
 

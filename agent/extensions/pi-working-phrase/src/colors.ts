@@ -37,9 +37,7 @@ function hexToRgb(hexColor: string): Rgb {
 }
 
 function rgbToHex({ r, g, b }: Rgb): string {
-	return `#${[r, g, b]
-		.map((value) => clampColorValue(value).toString(16).padStart(2, "0"))
-		.join("")}`;
+	return `#${[r, g, b].map((value) => clampColorValue(value).toString(16).padStart(2, "0")).join("")}`;
 }
 
 function lighten({ r, g, b }: Rgb, strength: number): Rgb {

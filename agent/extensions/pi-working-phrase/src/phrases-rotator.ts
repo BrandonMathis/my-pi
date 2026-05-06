@@ -21,7 +21,10 @@ function shuffledCopy<T>(items: readonly T[]): T[] {
 	return copy;
 }
 
-export function createPhraseRotator(phrases: readonly string[], options: PhraseRotatorOptions): {
+export function createPhraseRotator(
+	phrases: readonly string[],
+	options: PhraseRotatorOptions,
+): {
 	nextMessage(): string;
 	reset(): void;
 } {
