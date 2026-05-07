@@ -110,29 +110,18 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
-		if (executionMode && todoItems.length > 0) {
-			const completed = todoItems.filter((todo) => todo.completed).length;
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `📋 ${completed}/${todoItems.length}`));
+		if (executionMode) {
+			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", "▶ plan"));
 		} else if (planModeEnabled) {
 			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
 		} else {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
 
-		if (executionMode && todoItems.length > 0) {
-			const lines = todoItems.map((item) => {
-				if (item.completed) {
-					return (
-						ctx.ui.theme.fg("success", "☑ ") +
-						ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
-					);
-				}
-				return `${ctx.ui.theme.fg("muted", "☐ ")}${item.step}. ${item.text}`;
-			});
-			ctx.ui.setWidget("plan-todos", lines);
-		} else {
-			ctx.ui.setWidget("plan-todos", undefined);
-		}
+		// Plan mode keeps its internal saved-plan state for execution, but it no longer
+		// renders plan todos in the TUI. Leave todo display to the dedicated todos
+		// extension, and clear any stale widget from older plan-mode versions.
+		ctx.ui.setWidget("plan-todos", undefined);
 	}
 
 	function applyPlanModeTools(): void {
@@ -176,14 +165,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		ctx.ui.notify("Plan mode disabled. Normal tool access restored.", "info");
 	}
 
-	function showTodoList(ctx: ExtensionContext): void {
+	function showPlanStatus(ctx: ExtensionContext): void {
 		if (todoItems.length === 0) {
 			ctx.ui.notify("No saved plan yet. Ask pi to create a plan first.", "info");
 			return;
 		}
 
-		const list = todoItems.map((item) => `${item.step}. ${item.completed ? "✓" : "○"} ${item.text}`).join("\n");
-		ctx.ui.notify(`Plan Progress:\n${list}`, "info");
+		const completed = todoItems.filter((item) => item.completed).length;
+		ctx.ui.notify(`Plan saved: ${completed}/${todoItems.length} steps complete.`, "info");
 	}
 
 	function buildExecutionMessage(): string {
@@ -305,7 +294,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 					await executeSavedPlan(ctx);
 					return;
 				case "status":
-					showTodoList(ctx);
+					showPlanStatus(ctx);
 					return;
 				case "reset":
 					planModeEnabled = false;
@@ -320,13 +309,6 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				default:
 					ctx.ui.notify(`Unknown /plan subcommand: ${command}`, "error");
 			}
-		},
-	});
-
-	pi.registerCommand("todos", {
-		description: "Show the current saved plan and completion state",
-		handler: async (_args, ctx) => {
-			showTodoList(ctx);
 		},
 	});
 
@@ -415,7 +397,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				pi.sendMessage(
 					{
 						customType: "plan-complete",
-						content: `✅ Plan complete.\n\n${todoItems.map((item) => `- ${item.text}`).join("\n")}`,
+						content: "✅ Plan complete.",
 						display: true,
 					},
 					{ triggerTurn: false },
@@ -441,14 +423,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		persistState();
 		updateStatus(ctx);
 
-		pi.sendMessage(
-			{
-				customType: "plan-todo-list",
-				content: `**Saved plan (${todoItems.length} steps):**\n\n${todoItems.map((item) => `${item.step}. ☐ ${item.text}`).join("\n")}`,
-				display: true,
-			},
-			{ triggerTurn: false },
-		);
+		ctx.ui.notify(`Saved plan (${todoItems.length} steps).`, "success");
 
 		if (!ctx.hasUI) return;
 

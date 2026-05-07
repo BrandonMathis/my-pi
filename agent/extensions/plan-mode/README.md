@@ -8,9 +8,8 @@ Adds a Claude Code-style planning workflow to pi.
 - `/plan on` — enable read-only planning mode
 - `/plan off` — disable plan mode
 - `/plan execute` — rewind to the pre-plan branch point and execute the saved plan on a fresh execution branch
-- `/plan status` — show saved plan progress
+- `/plan status` — show saved plan progress summary
 - `/plan reset` — clear saved plan state
-- `/todos` — show the current saved plan
 
 ## Behavior
 
@@ -29,7 +28,7 @@ When execution starts:
 - the previous tool set is restored
 - the saved plan is injected back into context
 - pi is told to emit `[DONE:n]` markers as each step finishes
-- a progress widget is shown in the UI
+- plan-mode keeps internal progress state, but todo rendering is left to the dedicated todos extension
 
 ## Install / reload
 
