@@ -172,19 +172,11 @@ function getProviderColor(provider: SubscriptionProvider): string {
 
 function renderSolidBar(percent: number, width: number, fillColor: string, dim: (text: string) => string): string {
 	const clamped = clampPercent(percent);
-	const filledFloat = (clamped / 100) * width;
-	const filledFull = Math.floor(filledFloat);
-	const remainder = filledFloat - filledFull;
-	const partials = ["▏", "▎", "▍", "▌", "▋", "▊", "▉"];
-
-	let partial = "";
-	let emptyCount = width - filledFull;
-	if (remainder >= 0.0625 && filledFull < width) {
-		partial = partials[Math.max(0, Math.min(partials.length - 1, Math.round(remainder * 8) - 1))] ?? "";
-		emptyCount = Math.max(0, emptyCount - 1);
-	}
-
-	const filled = "█".repeat(filledFull) + partial;
+	// Avoid fractional block glyphs here: terminals render the unused part of
+	// those cells with the footer background, creating a third, dark color.
+	const filledCount = Math.round((clamped / 100) * width);
+	const emptyCount = width - filledCount;
+	const filled = "█".repeat(filledCount);
 	const empty = "░".repeat(emptyCount);
 	return `${hex(fillColor, filled)}${dim(empty)}`;
 }
