@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
@@ -33,7 +32,6 @@ type RateWindow = {
 
 type SubscriptionUsage = {
 	provider: SubscriptionProvider;
-	displayName?: string;
 	windows: RateWindow[];
 };
 
@@ -58,6 +56,17 @@ type FooterContextUsage = {
 	tokens: number | null;
 	contextWindow: number;
 	percent: number | null;
+};
+
+type TokenTotals = { input: number; output: number };
+type FooterPiece = string | false | null | undefined;
+
+type StatusBarParts = {
+	width: number;
+	top: FooterPiece[];
+	left: FooterPiece[];
+	right: string;
+	separator: string;
 };
 
 function hex(hexColor: string, text: string): string {
@@ -202,18 +211,14 @@ function getSubscriptionUsageFromPayload(payload: unknown): SubscriptionUsage | 
 	if (!state || typeof state !== "object") return undefined;
 	const rawState = state as { provider?: unknown; usage?: unknown };
 	const usage = rawState.usage && typeof rawState.usage === "object" ? rawState.usage : undefined;
-	const rawUsage = usage as { provider?: unknown; displayName?: unknown; windows?: unknown } | undefined;
+	const rawUsage = usage as { provider?: unknown; windows?: unknown } | undefined;
 	const provider = normalizeSubscriptionProvider(rawUsage?.provider ?? rawState.provider);
 	if (!provider || !Array.isArray(rawUsage?.windows)) return undefined;
 
 	const windows = rawUsage.windows.map(normalizeRateWindow).filter((w): w is RateWindow => Boolean(w));
 	if (windows.length === 0) return undefined;
 
-	return {
-		provider,
-		displayName: typeof rawUsage.displayName === "string" ? rawUsage.displayName : undefined,
-		windows,
-	};
+	return { provider, windows };
 }
 
 function getSubscriptionSessionWindow(usage: SubscriptionUsage): RateWindow | undefined {
@@ -402,7 +407,7 @@ async function fetchAnthropicSubscriptionUsage(): Promise<SubscriptionUsage | un
 		});
 	}
 
-	return windows.length > 0 ? { provider: "anthropic", displayName: "Claude Plan", windows } : undefined;
+	return windows.length > 0 ? { provider: "anthropic", windows } : undefined;
 }
 
 function pushCodexWindow(
@@ -457,7 +462,7 @@ async function fetchCodexSubscriptionUsage(): Promise<SubscriptionUsage | undefi
 		pushCodexRateWindows(windows, asRecord(entry.rate_limit), prefix);
 	}
 
-	return windows.length > 0 ? { provider: "codex", displayName: "Codex Plan", windows } : undefined;
+	return windows.length > 0 ? { provider: "codex", windows } : undefined;
 }
 
 function getContextSubscriptionProvider(ctx: ExtensionContext): SubscriptionProvider | undefined {
@@ -529,6 +534,85 @@ function getFooterContextUsage(entries: SessionEntryLike[], contextWindow: numbe
 	return { tokens: null, contextWindow, percent: null };
 }
 
+function compactPieces(parts: FooterPiece[]): string[] {
+	return parts.filter((part): part is string => typeof part === "string" && part.length > 0);
+}
+
+function getTokenTotals(entries: SessionEntryLike[]): TokenTotals {
+	return entries.reduce(
+		(totals, entry) => {
+			if (entry.type !== "message" || entry.message?.role !== "assistant") return totals;
+			return {
+				input: totals.input + (entry.message.usage?.input ?? 0),
+				output: totals.output + (entry.message.usage?.output ?? 0),
+			};
+		},
+		{ input: 0, output: 0 },
+	);
+}
+
+function renderTokenTotals({ input, output }: TokenTotals): string | undefined {
+	const parts = compactPieces([
+		input > 0 && `${hex(WHITE, "↑")}${hex(GREY, formatTokens(input))}`,
+		output > 0 && `${hex(WHITE, "↓")}${hex(GREY, formatTokens(output))}`,
+	]);
+	return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+function renderContextUsage(
+	usage: FooterContextUsage,
+	colorize: (color: "dim" | "warning" | "error", text: string) => string,
+): string {
+	const percent = usage.percent ?? 0;
+	const color = percent > 90 ? "error" : percent > 70 ? "warning" : "dim";
+	const tokensText = usage.tokens === null ? "?" : formatTokens(usage.tokens);
+	const percentText = usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
+	return colorize(color, `${tokensText}/${formatTokens(usage.contextWindow)} ${percentText} (auto)`);
+}
+
+function renderModelStatus({
+	modelId,
+	provider,
+	showProvider,
+	thinkingLevel,
+	dim,
+	bold,
+}: {
+	modelId: string;
+	provider?: string;
+	showProvider: boolean;
+	thinkingLevel: string;
+	dim: (text: string) => string;
+	bold: (text: string) => string;
+}): string {
+	const providerPart = provider && showProvider ? dim(`(${provider}) `) : "";
+	return `${providerPart}${hex(WHITE, bold(modelId))}${colorizeThinkingLevel(thinkingLevel)}`;
+}
+
+function fitLeftRight(left: string, right: string, width: number, minPadding = 2): string {
+	if (!left) return truncateToWidth(right, width, "");
+
+	const leftWidth = visibleWidth(left);
+	const rightWidth = visibleWidth(right);
+
+	if (leftWidth + minPadding + rightWidth <= width) {
+		return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
+	}
+
+	const availableForRight = width - leftWidth - minPadding;
+	if (availableForRight <= 0) return truncateToWidth(left, width, "");
+
+	const truncatedRight = truncateToWidth(right, availableForRight, "");
+	const padding = " ".repeat(Math.max(0, width - leftWidth - visibleWidth(truncatedRight)));
+	return `${left}${padding}${truncatedRight}`;
+}
+
+function assembleStatusBar({ width, top, left, right, separator }: StatusBarParts): string[] {
+	const headline = compactPieces(top).join(" ");
+	const status = compactPieces(left).join(separator);
+	return [truncateToWidth(headline, width, "..."), fitLeftRight(status, right, width)];
+}
+
 export default function customColoredFooter(pi: ExtensionAPI) {
 	let subscriptionUsage: SubscriptionUsage | undefined;
 	let requestFooterRender: (() => void) | undefined;
@@ -592,80 +676,41 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					let input = 0;
-					let output = 0;
-
 					const entries = ctx.sessionManager.getEntries() as SessionEntryLike[];
-					for (const entry of entries) {
-						if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-						const msg = entry.message as AssistantMessage;
-						input += msg.usage.input;
-						output += msg.usage.output;
-					}
-
+					const branchEntries = ctx.sessionManager.getBranch() as SessionEntryLike[];
 					const cwd = ctx.sessionManager.getCwd();
-					const dirName = basename(cwd) || cwd;
 					const branch = footerData.getGitBranch();
-					const sessionName = ctx.sessionManager.getSessionName() ?? getAutoSessionTitle(entries);
+					const subscription = subscriptionUsage &&
+						renderSubscriptionUsage(subscriptionUsage, (text) => theme.fg("dim", text));
+					const sessionTitle = ctx.sessionManager.getSessionName() ?? getAutoSessionTitle(entries);
 					const prNumber = extractPrNumber(branch);
 
-					const line1Parts = [`${FOLDER_ICON} ${dirName}`];
-					if (branch) line1Parts.push(theme.fg("dim", `(${branch})`));
-					if (sessionName) line1Parts.push(theme.fg("dim", `• ${sessionName}`));
-					if (prNumber) line1Parts.push(hex(BURNT_ORANGE, `PR #${prNumber}`));
-					const line1 = truncateToWidth(line1Parts.join(" "), width, "...");
-
-					const usageSections: string[] = [];
-					const tokenParts: string[] = [];
-					if (input > 0) tokenParts.push(`${hex(WHITE, "↑")}${hex(GREY, formatTokens(input))}`);
-					if (output > 0) tokenParts.push(`${hex(WHITE, "↓")}${hex(GREY, formatTokens(output))}`);
-					if (tokenParts.length > 0) usageSections.push(tokenParts.join(" "));
-
-					const branchEntries = ctx.sessionManager.getBranch() as SessionEntryLike[];
-					const contextWindow = ctx.model?.contextWindow ?? 0;
-					const contextUsage = getFooterContextUsage(branchEntries.length > 0 ? branchEntries : entries, contextWindow);
-					const contextPercentValue = contextUsage.percent ?? 0;
-					const contextTokensText = contextUsage.tokens === null ? "?" : formatTokens(contextUsage.tokens);
-					const contextPercentText = contextUsage.percent === null ? "?" : `${contextUsage.percent.toFixed(1)}%`;
-					const contextText = `${contextTokensText}/${formatTokens(contextUsage.contextWindow)} ${contextPercentText} (auto)`;
-					const contextColor = contextPercentValue > 90 ? "error" : contextPercentValue > 70 ? "warning" : "dim";
-					usageSections.push(theme.fg(contextColor, contextText));
-
-					if (subscriptionUsage) {
-						const renderedSubscription = renderSubscriptionUsage(subscriptionUsage, (text) => theme.fg("dim", text));
-						if (renderedSubscription) usageSections.push(renderedSubscription);
-					}
-					const left = usageSections.join(theme.fg("dim", " • "));
-
-					const modelId = ctx.model?.id || "no-model";
-					const provider = ctx.model?.provider;
-					const thinkingLevel = pi.getThinkingLevel();
-					const providerPart =
-						provider && footerData.getAvailableProviderCount() > 1 ? theme.fg("dim", `(${provider}) `) : "";
-					const modelPart = hex(WHITE, theme.bold(modelId));
-					const thinkingPart = colorizeThinkingLevel(thinkingLevel);
-					const right = `${providerPart}${modelPart}${thinkingPart}`;
-
-					let line2: string;
-					const minPadding = 2;
-					const leftWidth = visibleWidth(left);
-					const rightWidth = visibleWidth(right);
-					const totalNeeded = leftWidth + minPadding + rightWidth;
-					if (totalNeeded <= width) {
-						const padding = " ".repeat(width - leftWidth - rightWidth);
-						line2 = `${left}${padding}${right}`;
-					} else {
-						const availableForRight = width - leftWidth - minPadding;
-						if (availableForRight > 0) {
-							const truncatedRight = truncateToWidth(right, availableForRight, "");
-							const pad = " ".repeat(Math.max(0, width - leftWidth - visibleWidth(truncatedRight)));
-							line2 = `${left}${pad}${truncatedRight}`;
-						} else {
-							line2 = truncateToWidth(left, width, "");
-						}
-					}
-
-					return [line1, line2];
+					return assembleStatusBar({
+						width,
+						separator: theme.fg("dim", " • "),
+						top: [
+							`${FOLDER_ICON} ${basename(cwd) || cwd}`,
+							branch && theme.fg("dim", `(${branch})`),
+							sessionTitle && theme.fg("dim", `• ${sessionTitle}`),
+							prNumber && hex(BURNT_ORANGE, `PR #${prNumber}`),
+						],
+						left: [
+							renderTokenTotals(getTokenTotals(entries)),
+							renderContextUsage(
+								getFooterContextUsage(branchEntries.length > 0 ? branchEntries : entries, ctx.model?.contextWindow ?? 0),
+								(color, text) => theme.fg(color, text),
+							),
+							subscription,
+						],
+						right: renderModelStatus({
+							modelId: ctx.model?.id || "no-model",
+							provider: ctx.model?.provider,
+							showProvider: footerData.getAvailableProviderCount() > 1,
+							thinkingLevel: pi.getThinkingLevel(),
+							dim: (text) => theme.fg("dim", text),
+							bold: (text) => theme.bold(text),
+						}),
+					});
 				},
 			};
 		});
