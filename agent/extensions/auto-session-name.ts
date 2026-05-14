@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { complete } from "@mariozechner/pi-ai";
+import { complete, type Context, type ProviderStreamOptions } from "@mariozechner/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 type SessionEntryLike = {
@@ -15,6 +15,7 @@ type SessionEntryLike = {
 type AutoSessionNameEntry = {
 	version?: number;
 	title?: string;
+	/** @deprecated Older entries may include this. New entries avoid duplicating prompt text. */
 	prompt?: string;
 	generatedAt?: string;
 };
@@ -38,6 +39,7 @@ const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 	{ provider: "openai", id: "gpt-4.1" },
 ];
 const MAX_WORDS = 6;
+const MAX_WORD_CHARS = 10;
 const MAX_PROMPT_CHARS = 4_000;
 const AUTO_TITLE_ENTRY_TYPE = "auto-session-name";
 
@@ -158,6 +160,7 @@ const TITLE_SYSTEM_PROMPT = [
 	"Use short abstractions like UX, CI, API, CLI, or Docs when they clearly improve the title.",
 	"Write a compact title-case noun phrase suitable for a sidebar label.",
 	`Use 3 to ${MAX_WORDS} words when possible, never more than ${MAX_WORDS}.`,
+	`Never use a word longer than ${MAX_WORD_CHARS} characters.`,
 	"Return only the title. No quotes, bullets, labels, or commentary.",
 ].join("\n");
 
@@ -233,6 +236,19 @@ function truncateWords(value: string, maxWords: number): string {
 	return words.join(" ");
 }
 
+function truncateLongWord(word: string, maxChars: number): string {
+	if (word.length <= maxChars) return word;
+	return word.slice(0, maxChars).replace(/[-_/]+$/g, "") || word.slice(0, maxChars);
+}
+
+function enforceMaxWordLength(value: string, maxChars: number): string {
+	return value
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((word) => truncateLongWord(word, maxChars))
+		.join(" ");
+}
+
 function normalizeTitle(rawTitle: string): string | undefined {
 	let title = rawTitle.trim();
 	if (!title) return undefined;
@@ -253,6 +269,7 @@ function normalizeTitle(rawTitle: string): string | undefined {
 
 	title = normalizeWhitespace(title);
 	title = truncateWords(title, MAX_WORDS);
+	title = enforceMaxWordLength(title, MAX_WORD_CHARS);
 	title = toTitleCase(title);
 
 	return title.length > 0 ? title : undefined;
@@ -280,7 +297,7 @@ function simpleFallbackTitle(prompt: string): string | undefined {
 	const title = truncateWords(cleaned, MAX_WORDS);
 	if (!title) return undefined;
 
-	return toTitleCase(title);
+	return normalizeTitle(title);
 }
 
 function matchTitlePhrases(prompt: string): string[] {
@@ -323,6 +340,7 @@ function extractKeywordTokens(prompt: string): string[] {
 	for (const rawToken of rawTokens) {
 		const token = rawToken.trim();
 		if (!token) continue;
+		if (token.length > MAX_WORD_CHARS) continue;
 		const lower = token.toLowerCase();
 		if (TITLE_STOP_WORDS.has(lower) || GENERIC_TITLE_WORDS.has(lower)) continue;
 		if (/^\d+$/.test(token)) continue;
@@ -481,6 +499,7 @@ function buildTitlePrompt(prompt: string): string {
 		"Prefer a synthesized noun phrase over a prompt snippet.",
 		"Avoid titles that start with My, I, We, Help, Create, Build, Make, Fix, or Update.",
 		"Using short abstractions like UX, CI, API, CLI, or Docs is encouraged when accurate.",
+		`Do not use any word longer than ${MAX_WORD_CHARS} characters.`,
 		"Good titles often sound like feature names, bug labels, or ticket titles.",
 		"",
 		"Good vs bad examples:",
@@ -512,6 +531,40 @@ function buildTitlePrompt(prompt: string): string {
 	].join("\n");
 }
 
+function buildIsolatedTitleContext(prompt: string): Context {
+	return {
+		// This synthetic context is intentionally not derived from ctx.getSystemPrompt()
+		// or ctx.sessionManager. The title model only sees the title-generation
+		// instructions and the first user prompt being summarized.
+		systemPrompt: TITLE_SYSTEM_PROMPT,
+		messages: [
+			{
+				role: "user",
+				content: [{ type: "text", text: buildTitlePrompt(prompt) }],
+				timestamp: Date.now(),
+			},
+		],
+		// Keep tools out of the title request so it cannot start an agent/tool loop.
+		tools: [],
+	};
+}
+
+function buildIsolatedTitleOptions(auth: {
+	apiKey: string;
+	headers?: Record<string, string>;
+}): ProviderStreamOptions {
+	return {
+		apiKey: auth.apiKey,
+		headers: auth.headers,
+		temperature: 0.4,
+		maxTokens: 32,
+		reasoningEffort: "low",
+		// Do not attach Pi's current session id or provider prompt cache to this
+		// background title request. Providers treat this as a standalone call.
+		cacheRetention: "none",
+	};
+}
+
 async function generateTitle(prompt: string, ctx: ExtensionContext): Promise<string | undefined> {
 	const fallback = fallbackTitle(prompt);
 	const model = findTitleModel(ctx);
@@ -522,23 +575,8 @@ async function generateTitle(prompt: string, ctx: ExtensionContext): Promise<str
 
 	const response = await complete(
 		model,
-		{
-			systemPrompt: TITLE_SYSTEM_PROMPT,
-			messages: [
-				{
-					role: "user",
-					content: [{ type: "text", text: buildTitlePrompt(prompt) }],
-					timestamp: Date.now(),
-				},
-			],
-		},
-		{
-			apiKey: auth.apiKey,
-			headers: auth.headers,
-			temperature: 0.4,
-			maxTokens: 32,
-			reasoningEffort: "low",
-		},
+		buildIsolatedTitleContext(prompt),
+		buildIsolatedTitleOptions({ apiKey: auth.apiKey, headers: auth.headers }),
 	);
 
 	const rawTitle = response.content
@@ -594,9 +632,8 @@ export default function autoSessionNameExtension(pi: ExtensionAPI) {
 		}
 
 		pi.appendEntry<AutoSessionNameEntry>(AUTO_TITLE_ENTRY_TYPE, {
-			version: 1,
+			version: 2,
 			title,
-			prompt,
 			generatedAt: new Date().toISOString(),
 		});
 	}
