@@ -10,6 +10,9 @@ const BURNT_ORANGE = "#CC5500";
 const WHITE = "#FFFFFF";
 const GREY = "#9CA3AF";
 const GREEN = "#22C55E";
+const API_SPEND_START_GREEN = "#9CAEA4";
+const DRACULA_GREEN = "#50FA7B";
+const API_SPEND_MAX_DOLLARS = 5;
 const YELLOW = "#FACC15";
 const RED = "#EF4444";
 const CODEX_GREEN = "#10B981";
@@ -22,6 +25,7 @@ type AutoSessionNameEntry = {
 };
 
 type SubscriptionProvider = "anthropic" | "codex";
+type BillingMode = "api" | "subscription";
 
 type RateWindow = {
 	label: string;
@@ -48,6 +52,13 @@ type SessionEntryLike = {
 			cacheRead?: number;
 			cacheWrite?: number;
 			totalTokens?: number;
+			cost?: {
+				input?: number;
+				output?: number;
+				cacheRead?: number;
+				cacheWrite?: number;
+				total?: number;
+			};
 		};
 	};
 };
@@ -94,20 +105,24 @@ function rgbToHex(r: number, g: number, b: number): string {
 	return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
-function gradientText(text: string, fromHex: string, toHex: string): string {
+function mixHexColor(fromHex: string, toHex: string, amount: number): string {
 	const from = hexToRgb(fromHex);
 	const to = hexToRgb(toHex);
-	if (!from || !to) return text;
+	if (!from || !to) return toHex;
+	const t = Math.max(0, Math.min(1, amount));
+	const r = from.r + (to.r - from.r) * t;
+	const g = from.g + (to.g - from.g) * t;
+	const b = from.b + (to.b - from.b) * t;
+	return rgbToHex(r, g, b);
+}
+
+function gradientText(text: string, fromHex: string, toHex: string): string {
 	const chars = [...text];
 	const denominator = Math.max(chars.length - 1, 1);
 	return chars
 		.map((char, index) => {
 			if (char === " ") return char;
-			const t = index / denominator;
-			const r = from.r + (to.r - from.r) * t;
-			const g = from.g + (to.g - from.g) * t;
-			const b = from.b + (to.b - from.b) * t;
-			return hex(rgbToHex(r, g, b), char);
+			return hex(mixHexColor(fromHex, toHex, index / denominator), char);
 		})
 		.join("");
 }
@@ -160,10 +175,6 @@ function getPercentColor(percent: number): string {
 	if (percent >= 90) return RED;
 	if (percent >= 75) return YELLOW;
 	return percent >= 60 ? CLAUDE_ORANGE : GREEN;
-}
-
-function getProviderLabel(provider: SubscriptionProvider): string {
-	return provider === "anthropic" ? "Claude" : "Codex";
 }
 
 function getProviderColor(provider: SubscriptionProvider): string {
@@ -237,12 +248,60 @@ function renderSubscriptionUsage(usage: SubscriptionUsage, dim: (text: string) =
 	const percentColor = getPercentColor(percent);
 	const providerColor = getProviderColor(usage.provider);
 	const fillColor = percentColor === GREEN ? providerColor : percentColor;
-	const period = window.label ? `${getProviderLabel(usage.provider)} ${window.label}` : getProviderLabel(usage.provider);
+	const period = window.label ? `${hex(providerColor, window.label)} ` : "";
 	const bar = renderSolidBar(percent, SUBSCRIPTION_BAR_WIDTH, fillColor, dim);
 	const resetDescription = getLiveResetDescription(window);
 	const reset = resetDescription && resetDescription !== "__ACTIVE__" ? dim(`↻ ${resetDescription}`) : "";
 
-	return `${hex(providerColor, period)} ${bar} ${hex(percentColor, `${Math.round(percent)}%`)}${reset ? ` ${reset}` : ""}`;
+	return `${period}${bar} ${hex(percentColor, `${Math.round(percent)}%`)}${reset ? ` ${reset}` : ""}`;
+}
+
+function hasEnvironmentSubscriptionAuth(ctx: ExtensionContext): boolean {
+	const provider = ctx.model?.provider?.toLowerCase() ?? "";
+	if (provider.includes("anthropic")) return Boolean(stringValue(process.env.ANTHROPIC_OAUTH_TOKEN));
+	if (!provider.includes("codex")) return false;
+	return Boolean(
+		stringValue(process.env.OPENAI_CODEX_OAUTH_TOKEN) ??
+			stringValue(process.env.OPENAI_CODEX_ACCESS_TOKEN) ??
+			stringValue(process.env.CODEX_OAUTH_TOKEN) ??
+			stringValue(process.env.CODEX_ACCESS_TOKEN),
+	);
+}
+
+function getContextBillingMode(ctx: ExtensionContext): BillingMode | undefined {
+	if (!ctx.model) return undefined;
+	return ctx.modelRegistry.isUsingOAuth(ctx.model) || hasEnvironmentSubscriptionAuth(ctx) ? "subscription" : "api";
+}
+
+function formatDollars(amount: number): string {
+	if (!Number.isFinite(amount) || amount <= 0) return "$0.000";
+	return `$${amount < 0.01 ? amount.toFixed(4) : amount.toFixed(3)}`;
+}
+
+function getUsageCostTotal(usage: SessionEntryLike["message"]["usage"]): number {
+	const cost = usage?.cost;
+	if (!cost) return 0;
+	const total = numberValue(cost.total);
+	if (total !== undefined) return total;
+	return (
+		(numberValue(cost.input) ?? 0) +
+		(numberValue(cost.output) ?? 0) +
+		(numberValue(cost.cacheRead) ?? 0) +
+		(numberValue(cost.cacheWrite) ?? 0)
+	);
+}
+
+function getSessionSpend(entries: SessionEntryLike[]): number {
+	return entries.reduce((total, entry) => {
+		if (entry.type !== "message" || entry.message?.role !== "assistant") return total;
+		return total + getUsageCostTotal(entry.message.usage);
+	}, 0);
+}
+
+function renderSessionSpend(entries: SessionEntryLike[]): string {
+	const total = getSessionSpend(entries);
+	const color = mixHexColor(API_SPEND_START_GREEN, DRACULA_GREEN, total / API_SPEND_MAX_DOLLARS);
+	return hex(color, formatDollars(total));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -461,9 +520,7 @@ function getContextSubscriptionProvider(ctx: ExtensionContext): SubscriptionProv
 	const provider = ctx.model?.provider?.toLowerCase() ?? "";
 	const modelId = ctx.model?.id?.toLowerCase() ?? "";
 	if (provider.includes("anthropic") || modelId.includes("claude")) return "anthropic";
-	if (provider.includes("codex") || provider.includes("openai") || /(^|[-_])(gpt|o1|o3|o4)([-_]|$)/.test(modelId)) {
-		return "codex";
-	}
+	if (provider.includes("codex")) return "codex";
 	return undefined;
 }
 
@@ -619,10 +676,20 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 	};
 
 	const updateSubscriptionUsage = (payload: unknown) => {
+		if (lastContext && getContextBillingMode(lastContext) !== "subscription") {
+			setSubscriptionUsage(undefined);
+			return;
+		}
 		setSubscriptionUsage(getSubscriptionUsageFromPayload(payload));
 	};
 
 	const refreshSubscriptionUsage = (ctx: ExtensionContext, force = false) => {
+		if (getContextBillingMode(ctx) !== "subscription") {
+			subscriptionRefreshId += 1;
+			if (subscriptionUsage) setSubscriptionUsage(undefined);
+			return;
+		}
+
 		const now = Date.now();
 		if (!force && now - lastSubscriptionRefreshAt < 60_000) return;
 		lastSubscriptionRefreshAt = now;
@@ -630,7 +697,9 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 		const refreshId = ++subscriptionRefreshId;
 		void fetchSubscriptionUsageForContext(ctx).then((nextUsage) => {
 			if (refreshId !== subscriptionRefreshId) return;
-			if (nextUsage) {
+			if (getContextBillingMode(ctx) !== "subscription") {
+				setSubscriptionUsage(undefined);
+			} else if (nextUsage) {
 				setSubscriptionUsage(nextUsage);
 			} else if (!expectedProvider || !subscriptionUsage || subscriptionUsage.provider !== expectedProvider) {
 				setSubscriptionUsage(undefined);
@@ -672,8 +741,13 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 					const branchEntries = ctx.sessionManager.getBranch() as SessionEntryLike[];
 					const cwd = ctx.sessionManager.getCwd();
 					const branch = footerData.getGitBranch();
-					const subscription = subscriptionUsage &&
-						renderSubscriptionUsage(subscriptionUsage, (text) => theme.fg("dim", text));
+					const billingMode = getContextBillingMode(ctx);
+					const billing =
+						billingMode === "subscription"
+							? subscriptionUsage && renderSubscriptionUsage(subscriptionUsage, (text) => theme.fg("dim", text))
+							: billingMode === "api"
+								? renderSessionSpend(entries)
+								: undefined;
 					const sessionTitle = ctx.sessionManager.getSessionName() ?? getAutoSessionTitle(entries);
 					const prNumber = extractPrNumber(branch);
 
@@ -692,7 +766,7 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 								getFooterContextUsage(branchEntries.length > 0 ? branchEntries : entries, ctx.model?.contextWindow ?? 0),
 								(color, text) => theme.fg(color, text),
 							),
-							subscription,
+							billing,
 						],
 						right: renderModelStatus({
 							modelId: ctx.model?.id || "no-model",
