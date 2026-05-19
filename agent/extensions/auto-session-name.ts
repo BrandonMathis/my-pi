@@ -594,6 +594,10 @@ export default function autoSessionNameExtension(pi: ExtensionAPI) {
 	let activeSessionId: string | undefined;
 	let generationEpoch = 0;
 
+	function normalizeManualSessionName(value: string): string {
+		return normalizeWhitespace(value);
+	}
+
 	function getDisplayedTitle(ctx?: ExtensionContext): string | undefined {
 		const currentCtx = ctx ?? lastCtx;
 		const sessionName = currentCtx?.sessionManager.getSessionName() ?? pi.getSessionName();
@@ -654,6 +658,36 @@ export default function autoSessionNameExtension(pi: ExtensionAPI) {
 			refreshDisplay(ctx);
 		}
 	}
+
+	function applyManualSessionName(name: string, ctx: ExtensionContext): void {
+		generationEpoch += 1;
+		namingResolved = true;
+		lastCtx = ctx;
+		pi.setSessionName(name);
+		refreshDisplay(ctx);
+	}
+
+	pi.registerCommand("session-name", {
+		description: "Set the current session name (usage: /session-name [new name])",
+		handler: async (args, ctx) => {
+			let name = normalizeManualSessionName(args);
+
+			if (!name) {
+				const currentName = getDisplayedTitle(ctx) ?? "";
+				const editedName = await ctx.ui.editor("Edit session name", currentName);
+				if (editedName === undefined) return;
+				name = normalizeManualSessionName(editedName);
+			}
+
+			if (!name) {
+				ctx.ui.notify("Session name cannot be empty.", "warning");
+				return;
+			}
+
+			applyManualSessionName(name, ctx);
+			ctx.ui.notify(`Session renamed: ${name}`, "info");
+		},
+	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		generationEpoch += 1;
