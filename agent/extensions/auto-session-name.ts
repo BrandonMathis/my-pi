@@ -59,6 +59,8 @@ const GENERIC_TITLE_WORDS = new Set([
 	"review",
 	"explain",
 	"update",
+	"modify",
+	"change",
 	"refactor",
 	"my",
 	"your",
@@ -68,6 +70,8 @@ const GENERIC_TITLE_WORDS = new Set([
 const TITLE_STOP_WORDS = new Set([
 	"a",
 	"an",
+	"allow",
+	"allows",
 	"and",
 	"are",
 	"as",
@@ -90,6 +94,7 @@ const TITLE_STOP_WORDS = new Set([
 	"into",
 	"is",
 	"it",
+	"let",
 	"lets",
 	"let's",
 	"me",
@@ -98,6 +103,8 @@ const TITLE_STOP_WORDS = new Set([
 	"on",
 	"or",
 	"our",
+	"provide",
+	"provides",
 	"see",
 	"show",
 	"so",
@@ -107,6 +114,7 @@ const TITLE_STOP_WORDS = new Set([
 	"to",
 	"type",
 	"update",
+	"us",
 	"want",
 	"when",
 	"with",
@@ -118,11 +126,30 @@ const TITLE_STOP_WORDS = new Set([
 const LEADING_NOISE_PATTERNS = [
 	/^(?:please\s+)?(?:help\s+me|can\s+you|could\s+you|would\s+you)\s+(?:to\s+)?/i,
 	/^(?:please\s+)?(?:i\s+need|i\s+want)\s+(?:to\s+)?/i,
-	/^(?:please\s+)?(?:create|build|make|write|generate|add|implement|fix|debug|diagnose|investigate|review|explain|update|refactor)\s+/i,
+	/^(?:please\s+)?(?:create|build|make|write|generate|add|implement|fix|debug|diagnose|investigate|review|explain|update|modify|change|refactor)\s+/i,
 	/^(?:let'?s|lets)\s+/i,
 ];
 
+const OUTCOME_CLAUSE_PATTERNS: readonly RegExp[] = [
+	/\b(?:so\s+that|so)\s+(?:we|i|you|it|they|users?)?\s*(?:can\s+)?(.+)$/i,
+	/\b(?:that|which)\s+(?:lets?|allows?|enables?)\s+(?:us|me|you|users?)?\s+(.+)$/i,
+	/\bto\s+(?:provide|add|create|build|implement|support|enable|allow|let|show|display|expose|make)\s+(.+)$/i,
+];
+
 const TITLE_PHRASE_PATTERNS: readonly TitlePhrasePattern[] = [
+	{
+		pattern:
+			/\b(?:slash\s+command|\/[a-z][\w-]*)\b.*\bsession\s+names?\b|\bsession\s+names?\b.*\b(?:slash\s+command|\/[a-z][\w-]*)\b|\b(?:modify|edit|rename|change)\s+(?:the\s+)?session\s+names?\b.*\b(?:command|slash\s+command)\b/i,
+		title: "Session Rename Command",
+		weight: 86,
+	},
+	{
+		pattern:
+			/\b(?:modify|edit|rename|change)\s+(?:the\s+)?session\s+names?\b|\bsession\s+names?\s+(?:can\s+be\s+)?(?:modified|edited|renamed|changed)\b/i,
+		title: "Session Rename",
+		weight: 78,
+	},
+	{ pattern: /\bslash\s+commands?\b|\b\/[a-z][\w-]*\b/i, title: "Slash Command", weight: 44 },
 	{ pattern: /\bauto\s+session\s+name(?:\s+generator)?\b/i, title: "Session Naming", weight: 60 },
 	{ pattern: /\bsession\s+names?\b/i, title: "Session Naming", weight: 58 },
 	{ pattern: /\bsession\s+naming\b/i, title: "Session Naming", weight: 58 },
@@ -150,15 +177,13 @@ const TITLE_PHRASE_PATTERNS: readonly TitlePhrasePattern[] = [
 ];
 
 const TITLE_SYSTEM_PROMPT = [
-	"You generate concise, high-signal session titles for technical work.",
-	"Infer the real task, bug, feature, subsystem, or UX change and name that directly.",
-	"Do not echo the opening words of the prompt or lightly rewrite the first few words.",
-	"Synthesize a title from the important concepts instead of clipping a prompt prefix.",
-	"Avoid generic leading verbs such as Help, Create, Build, Make, Write, Generate, Add, Implement, Fix, Debug, or Investigate.",
-	"Avoid first-person phrasing like My, I, We, or Can You.",
-	"Prefer concrete technical keywords like frameworks, files, APIs, errors, commands, tools, and UI surfaces.",
-	"Use short abstractions like UX, CI, API, CLI, or Docs when they clearly improve the title.",
-	"Write a compact title-case noun phrase suitable for a sidebar label.",
+	"You generate concise, high-signal titles for technical work sessions.",
+	"Infer the actual task outcome, not the prompt wording.",
+	"Never title by clipping, paraphrasing, or lightly rewriting the first few words.",
+	"For prompts shaped like 'update/modify/add/fix X to do Y', emphasize the Y capability or user-visible outcome.",
+	"Prefer concrete nouns: features, commands, APIs, files, UI surfaces, bugs, errors, tests, integrations, and workflows.",
+	"Avoid generic action verbs and first-person words.",
+	"Write a compact Title Case noun phrase suitable for a sidebar label.",
 	`Use 3 to ${MAX_WORDS} words when possible, never more than ${MAX_WORDS}.`,
 	`Never use a word longer than ${MAX_WORD_CHARS} characters.`,
 	"Return only the title. No quotes, bullets, labels, or commentary.",
@@ -286,15 +311,39 @@ function sanitizePromptText(prompt: string): string {
 	);
 }
 
+function extractOutcomePrompt(prompt: string): string | undefined {
+	const cleaned = sanitizePromptText(prompt);
+	for (const pattern of OUTCOME_CLAUSE_PATTERNS) {
+		const match = pattern.exec(cleaned);
+		const outcome = normalizeWhitespace(match?.[1] ?? "");
+		if (tokenizeForComparison(outcome).length >= 2) return outcome;
+	}
+	return undefined;
+}
+
+function uniqueItems(values: string[]): string[] {
+	const seen = new Set<string>();
+	const unique: string[] = [];
+	for (const value of values) {
+		const key = value.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(value);
+	}
+	return unique;
+}
+
 function simpleFallbackTitle(prompt: string): string | undefined {
+	const source = extractOutcomePrompt(prompt) ?? prompt;
 	const cleaned = stripLeadingNoise(
-		sanitizePromptText(prompt)
+		sanitizePromptText(source)
 			.replace(/[^\p{L}\p{N}\s/_-]+/gu, " ")
 			.trim(),
 	);
 	if (!cleaned) return undefined;
 
-	const title = truncateWords(cleaned, MAX_WORDS);
+	const keywordTitle = extractKeywordTokens(cleaned).slice(0, MAX_WORDS).join(" ");
+	const title = keywordTitle || truncateWords(cleaned, MAX_WORDS);
 	if (!title) return undefined;
 
 	return normalizeTitle(title);
@@ -362,14 +411,28 @@ function extractKeywordTokens(prompt: string): string[] {
 }
 
 function heuristicFallbackTitle(prompt: string): string | undefined {
-	const phrases = matchTitlePhrases(prompt);
-	const keywordTokens = extractKeywordTokens(prompt);
+	const outcomePrompt = extractOutcomePrompt(prompt);
+	const phrasePrompt = outcomePrompt ? `${outcomePrompt} ${prompt}` : prompt;
+	const phrases = matchTitlePhrases(phrasePrompt);
+	const keywordTokens = uniqueItems([
+		...(outcomePrompt ? extractKeywordTokens(outcomePrompt) : []),
+		...extractKeywordTokens(prompt),
+	]);
 	const hasPi = keywordTokens.some((token) => token.toLowerCase() === "pi");
+	const hasSessionRenameCommand = phrases.includes("Session Rename Command");
+	const hasSessionRename = phrases.includes("Session Rename");
+	const hasSlashCommand = phrases.includes("Slash Command");
 	const hasSessionNaming = phrases.includes("Session Naming");
 	const hasFooter = phrases.includes("Footer");
 	const hasResume = phrases.includes("/resume");
 	const hasPromptHistory = phrases.includes("Prompt History") || phrases.includes("Session History");
 
+	if (hasSessionRenameCommand || (hasSessionRename && hasSlashCommand)) {
+		return normalizeTitle(`${hasPi ? "Pi " : ""}Session Rename Command`);
+	}
+	if (hasSessionRename) {
+		return normalizeTitle(`${hasPi ? "Pi " : ""}Session Rename`);
+	}
 	if (hasSessionNaming && hasFooter && (hasResume || hasPromptHistory)) {
 		return normalizeTitle(`${hasPi ? "Pi " : ""}Session Naming UX`);
 	}
@@ -422,13 +485,28 @@ function isPromptPrefixTitle(title: string, prompt: string): boolean {
 	return false;
 }
 
+function isEarlyPromptSliceTitle(title: string, prompt: string): boolean {
+	const titleWords = tokenizeForComparison(title);
+	if (titleWords.length < 2) return false;
+
+	for (const variant of [prompt, stripLeadingNoise(prompt)]) {
+		const promptWords = tokenizeForComparison(variant).slice(0, Math.max(12, titleWords.length + 4));
+		if (promptWords.length < titleWords.length) continue;
+		for (let index = 0; index <= promptWords.length - titleWords.length; index += 1) {
+			if (titleWords.every((word, offset) => word === promptWords[index + offset])) return true;
+		}
+	}
+
+	return false;
+}
+
 function isGenericTitle(title: string): boolean {
 	const [firstWord] = tokenizeForComparison(title);
 	return firstWord ? GENERIC_TITLE_WORDS.has(firstWord) : false;
 }
 
 function isUsableTitle(title: string, prompt: string): boolean {
-	return !isPromptPrefixTitle(title, prompt) && !isGenericTitle(title);
+	return !isPromptPrefixTitle(title, prompt) && !isEarlyPromptSliceTitle(title, prompt) && !isGenericTitle(title);
 }
 
 function isCommandLikePrompt(prompt: string): boolean {
@@ -471,11 +549,10 @@ function getStoredAutoTitle(entries: SessionEntryLike[]): string | undefined {
 }
 
 function findTitleModel(ctx: ExtensionContext) {
-	const candidates: ModelCandidate[] = [];
+	const candidates: ModelCandidate[] = [...MODEL_CANDIDATES];
 	if (ctx.model) {
 		candidates.push({ provider: ctx.model.provider, id: ctx.model.id });
 	}
-	candidates.push(...MODEL_CANDIDATES);
 
 	const seen = new Set<string>();
 	for (const candidate of candidates) {
@@ -490,26 +567,39 @@ function findTitleModel(ctx: ExtensionContext) {
 
 function buildTitlePrompt(prompt: string): string {
 	return [
-		"Create the best session title for this first user prompt.",
-		"Target the actual work to be done, not the conversational phrasing.",
-		"If the prompt asks for debugging, name the system plus the bug, error, or symptom.",
-		"If the prompt asks to build something, name the artifact, feature, or integration being built.",
-		"If the prompt asks for explanation or planning, name the topic or decision being explored.",
-		"If the prompt asks for a UI or workflow change, name the affected feature or UX area.",
-		"Prefer a synthesized noun phrase over a prompt snippet.",
-		"Avoid titles that start with My, I, We, Help, Create, Build, Make, Fix, or Update.",
-		"Using short abstractions like UX, CI, API, CLI, or Docs is encouraged when accurate.",
-		`Do not use any word longer than ${MAX_WORD_CHARS} characters.`,
-		"Good titles often sound like feature names, bug labels, or ticket titles.",
+		"Create a concise session title for this technical work.",
+		"Your job is NOT to summarize the opening phrase. Your job is to infer the actual task outcome.",
+		"Internally identify the component/system/tool/UI surface, the requested change or bug, and the shortest useful noun phrase combining those ideas.",
+		"Prefer the new capability, bug, decision, or user-visible outcome over the generic action.",
+		"If the prompt says 'update/modify/fix/add X to do Y', usually title the Y capability, not 'Update X'.",
+		"Do not start with Help, Create, Build, Make, Write, Generate, Add, Implement, Fix, Debug, Investigate, Update, Modify, My, Our, We, I, or Can You.",
+		"Do not copy a contiguous phrase from the beginning of the prompt.",
+		"Avoid generic labels like Extension Update, Code Fix, Session Work, or Project Update.",
+		"Prefer concrete nouns: commands, APIs, UI surfaces, errors, tools, files, workflows, tests, and integrations.",
+		`Use Title Case, 3 to ${MAX_WORDS} words when possible, and no word longer than ${MAX_WORD_CHARS} characters.`,
+		"Good titles often sound like issue labels, feature names, or bug labels.",
 		"",
 		"Good vs bad examples:",
+		"Prompt: Update our auto session name extension to provide a slash command that lets us modify the session name.",
+		"Bad: Update Our Auto Session",
+		"Bad: Auto Session Name Extension",
+		"Good: Session Rename Command",
+		"",
+		"Prompt: Modify the footer extension so it shows background subagent progress.",
+		"Bad: Modify The Footer Extension",
+		"Good: Subagent Progress Footer",
+		"",
+		"Prompt: Add a way to edit saved prompts from the prompt template picker.",
+		"Bad: Add A Way To Edit",
+		"Good: Prompt Template Editing",
+		"",
 		"Prompt: I get this error when I open a markdown file in neovim. Diagnose my configs and versions, I recently updated neovim, this may be some incompatibility issue.",
 		"Bad: I Get This Error When",
 		"Good: Neovim Markdown Treesitter Error",
 		"",
 		"Prompt: Create an extension that allows me to run /help and ask a question about pi and pi will inspect its own internal docs then produce an answer.",
 		"Bad: Create An Extension That Allows",
-		"Good: Pi Help Docs Extension",
+		"Good: Pi Help Docs Command",
 		"",
 		"Prompt: Help me debug a failing GitHub Actions deploy after upgrading Node.",
 		"Bad: Help Me Debug A Failing",
@@ -556,7 +646,7 @@ function buildIsolatedTitleOptions(auth: {
 	return {
 		apiKey: auth.apiKey,
 		headers: auth.headers,
-		temperature: 0.4,
+		temperature: 0.15,
 		maxTokens: 32,
 		reasoningEffort: "low",
 		// Do not attach Pi's current session id or provider prompt cache to this
