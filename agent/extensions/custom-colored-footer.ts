@@ -12,6 +12,8 @@ const GREY = "#9CA3AF";
 const GREEN = "#22C55E";
 const API_SPEND_START_GREEN = "#9CAEA4";
 const DRACULA_GREEN = "#50FA7B";
+const CONTEXT_START_GREEN = "#F4FFF6";
+const CONTEXT_ORANGE = "#F97316";
 const API_SPEND_MAX_DOLLARS = 5;
 const YELLOW = "#FACC15";
 const RED = "#EF4444";
@@ -175,6 +177,26 @@ function getPercentColor(percent: number): string {
 	if (percent >= 90) return RED;
 	if (percent >= 75) return YELLOW;
 	return percent >= 60 ? CLAUDE_ORANGE : GREEN;
+}
+
+const CONTEXT_USAGE_COLOR_STOPS = [
+	{ percent: 0, color: CONTEXT_START_GREEN },
+	{ percent: 50, color: DRACULA_GREEN },
+	{ percent: 60, color: YELLOW },
+	{ percent: 75, color: CONTEXT_ORANGE },
+	{ percent: 85, color: RED },
+] as const;
+
+function getContextUsageColor(percent: number): string {
+	const clamped = clampPercent(percent);
+	for (let index = 1; index < CONTEXT_USAGE_COLOR_STOPS.length; index += 1) {
+		const previous = CONTEXT_USAGE_COLOR_STOPS[index - 1];
+		const next = CONTEXT_USAGE_COLOR_STOPS[index];
+		if (!previous || !next || clamped > next.percent) continue;
+		const span = next.percent - previous.percent || 1;
+		return mixHexColor(previous.color, next.color, (clamped - previous.percent) / span);
+	}
+	return RED;
 }
 
 function getProviderColor(provider: SubscriptionProvider): string {
@@ -608,15 +630,12 @@ function renderTokenTotals({ input, output }: TokenTotals): string | undefined {
 	return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-function renderContextUsage(
-	usage: FooterContextUsage,
-	colorize: (color: "dim" | "warning" | "error", text: string) => string,
-): string {
+function renderContextUsage(usage: FooterContextUsage, dim: (text: string) => string): string {
 	const percent = usage.percent ?? 0;
-	const color = percent > 90 ? "error" : percent > 70 ? "warning" : "dim";
+	const color = getContextUsageColor(percent);
 	const tokensText = usage.tokens === null ? "?" : formatTokens(usage.tokens);
 	const percentText = usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
-	return colorize(color, `${tokensText}/${formatTokens(usage.contextWindow)} ${percentText} (auto)`);
+	return `${dim(`${tokensText}/${formatTokens(usage.contextWindow)} `)}${hex(color, percentText)}${dim(" (auto)")}`;
 }
 
 function renderModelStatus({
@@ -764,7 +783,7 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 							renderTokenTotals(getTokenTotals(entries)),
 							renderContextUsage(
 								getFooterContextUsage(branchEntries.length > 0 ? branchEntries : entries, ctx.model?.contextWindow ?? 0),
-								(color, text) => theme.fg(color, text),
+								(text) => theme.fg("dim", text),
 							),
 							billing,
 						],
