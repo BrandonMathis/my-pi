@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/@aliou/pi-guardrails@0.13.2/schema.json",
+  "version": "0.9.0-20260327",
+  "permissionGate": {
+    "allowedPatterns": [
+      {
+        "pattern": "^\\s*rm\\s+(?=[^\\n;|&]*?(?:-[^-\\s]*[rR][^-\\s]*|--recursive|--dir))(?=[^\\n;|&]*?(?:-[^-\\s]*f[^-\\s]*|--force))[^\\n;|&]*$",
+        "regex": true,
+        "description": "Allow single rm recursive-force delete commands"
+      }
+    ]
+  }
+}
