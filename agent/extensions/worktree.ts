@@ -150,6 +150,21 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
+	function remoteRefToLocalBranch(ref: string): string {
+		return ref.replace(/^[^/]+\//, "");
+	}
+
+	function remoteRefsForLocalBranch(remote: string[], branch: string): string[] {
+		return remote.filter((ref) => remoteRefToLocalBranch(ref) === branch);
+	}
+
+	function buildBranchCache(local: string[], remote: string[]): string[] {
+		const remoteLocalNames = remote
+			.map(remoteRefToLocalBranch)
+			.filter((branch) => !local.includes(branch));
+		return [...new Set([...local, ...remoteLocalNames, ...remote])];
+	}
+
 	function sanitizeBranchForPath(branch: string): string {
 		return branch.replace(/[^A-Za-z0-9._-]+/g, "-");
 	}
@@ -366,7 +381,7 @@ export default function (pi: ExtensionAPI) {
 			const worktreesBase = join(mainRoot, ".pi", "worktrees");
 			const { local, remote } = await listBranches(ctx.cwd);
 			const worktrees = await listWorktrees(ctx.cwd);
-			branchCache = [...local, ...remote];
+			branchCache = buildBranchCache(local, remote);
 
 			const checkedOut = new Map<string, string>(); // branch -> worktree path
 			for (const wt of worktrees) {
@@ -382,7 +397,7 @@ export default function (pi: ExtensionAPI) {
 					options.push(wt ? `${b}  (worktree exists)` : b);
 				}
 				for (const r of remote) {
-					const localName = r.replace(/^[^/]+\//, "");
+					const localName = remoteRefToLocalBranch(r);
 					if (!local.includes(localName)) options.push(`${r}  (remote)`);
 				}
 				options.push(CREATE_NEW);
@@ -430,15 +445,32 @@ export default function (pi: ExtensionAPI) {
 					baseDescription = base;
 					createArgs = ["-b", branch, baseRef];
 				}
-			} else if (remote.includes(choice) && !local.includes(choice.replace(/^[^/]+\//, ""))) {
-				// Remote branch with no local counterpart: create tracking branch
-				branch = choice.replace(/^[^/]+\//, "");
-				createArgs = ["-b", branch, "--track", choice];
-				const detail = await describeRef(ctx.cwd, choice);
-				baseDescription = detail ? `${choice} — ${detail}` : choice;
-			} else {
-				branch = choice.replace(/^[^/]+\//, "");
+			} else if (local.includes(choice)) {
+				branch = choice;
+			} else if (remote.includes(choice)) {
+				// Fully-qualified remote branch, e.g. origin/feature/foo.
+				branch = remoteRefToLocalBranch(choice);
 				if (!local.includes(branch)) {
+					createArgs = ["-b", branch, "--track", choice];
+					const detail = await describeRef(ctx.cwd, choice);
+					baseDescription = detail ? `${choice} — ${detail}` : choice;
+				}
+			} else {
+				// Unqualified remote branch, e.g. /worktree feature/foo when only origin/feature/foo exists.
+				const matchingRemoteRefs = remoteRefsForLocalBranch(remote, choice);
+				if (matchingRemoteRefs.length === 1) {
+					branch = choice;
+					const remoteRef = matchingRemoteRefs[0];
+					createArgs = ["-b", branch, "--track", remoteRef];
+					const detail = await describeRef(ctx.cwd, remoteRef);
+					baseDescription = detail ? `${remoteRef} — ${detail}` : remoteRef;
+				} else if (matchingRemoteRefs.length > 1) {
+					ctx.ui.notify(
+						`Ambiguous remote branch '${choice}'; use one of: ${matchingRemoteRefs.join(", ")}`,
+						"error",
+					);
+					return;
+				} else {
 					ctx.ui.notify(`Unknown branch: ${choice}`, "error");
 					return;
 				}
@@ -529,7 +561,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		try {
 			const { local, remote } = await listBranches(ctx.cwd);
-			branchCache = [...local, ...remote];
+			branchCache = buildBranchCache(local, remote);
 			const mainRoot = await getMainRepoRoot(ctx.cwd);
 			worktreeCache = (await listWorktrees(ctx.cwd))
 				.filter((wt) => resolve(wt.path) !== resolve(mainRoot))
