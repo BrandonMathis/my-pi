@@ -4,9 +4,9 @@
   "permissionGate": {
     "allowedPatterns": [
       {
-        "pattern": "^\\s*rm\\s+(?=[^\\n;|&]*?(?:-[^-\\s]*[rR][^-\\s]*|--recursive|--dir))(?=[^\\n;|&]*?(?:-[^-\\s]*f[^-\\s]*|--force))[^\\n;|&]*$",
+        "pattern": "^(?=[\\s\\S]*(?:^|[;&|\\n])\\s*rm\\s+(?=[^;&|\\n]*?(?:-[^\\s;&|]*[rR][^\\s;&|]*|--recursive\\b|--dir\\b))(?=[^;&|\\n]*?(?:-[^\\s;&|]*f[^\\s;&|]*|--force\\b))[^;&|\\n]*)(?![\\s\\S]*(?:^|[;&|\\n])\\s*(?:sudo|doas|pkexec|shred|wipefs|blkdiscard|fdisk|sfdisk|cfdisk|parted|sgdisk)\\b)(?![\\s\\S]*(?:^|[;&|\\n])\\s*dd\\b[^;&|\\n]*\\bof=)(?![\\s\\S]*(?:^|[;&|\\n])\\s*mkfs(?:\\b|\\.))(?![\\s\\S]*(?:^|[;&|\\n])\\s*chmod\\b[^;&|\\n]*(?:-[^\\s;&|]*R[^\\s;&|]*|--recursive\\b)[^;&|\\n]*(?:777|0777|a\\+rwx|ugo\\+rwx|7777|1777))(?![\\s\\S]*(?:^|[;&|\\n])\\s*chown\\b[^;&|\\n]*(?:-[^\\s;&|]*R[^\\s;&|]*|--recursive\\b))(?![\\s\\S]*(?:^|[;&|\\n])\\s*(?:docker|podman)\\s+(?:run|create)\\b[^;&|\\n]*(?:--privileged(?:=|\\b)|--pid=host\\b|--network=host\\b|--userns=host\\b|--uts=host\\b|--ipc=host\\b|(?:-v|--volume=)/:|/var/run/docker\\.sock|/run/docker\\.sock|/var/run/podman\\.sock|/run/podman\\.sock))[\\s\\S]*$",
         "regex": true,
-        "description": "Allow single rm recursive-force delete commands"
+        "description": "Allow recursive force delete commands when no other known dangerous command is present"
       }
     ]
   }
