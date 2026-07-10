@@ -703,7 +703,8 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 	};
 
 	const refreshSubscriptionUsage = (ctx: ExtensionContext, force = false) => {
-		if (getContextBillingMode(ctx) !== "subscription") {
+		const billingMode = getContextBillingMode(ctx);
+		if (billingMode !== "subscription") {
 			subscriptionRefreshId += 1;
 			if (subscriptionUsage) setSubscriptionUsage(undefined);
 			return;
@@ -714,16 +715,20 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 		lastSubscriptionRefreshAt = now;
 		const expectedProvider = getContextSubscriptionProvider(ctx);
 		const refreshId = ++subscriptionRefreshId;
-		void fetchSubscriptionUsageForContext(ctx).then((nextUsage) => {
-			if (refreshId !== subscriptionRefreshId) return;
-			if (getContextBillingMode(ctx) !== "subscription") {
-				setSubscriptionUsage(undefined);
-			} else if (nextUsage) {
-				setSubscriptionUsage(nextUsage);
-			} else if (!expectedProvider || !subscriptionUsage || subscriptionUsage.provider !== expectedProvider) {
-				setSubscriptionUsage(undefined);
-			}
-		});
+		void fetchSubscriptionUsageForContext(ctx)
+			.then((nextUsage) => {
+				if (refreshId !== subscriptionRefreshId) return;
+				if (nextUsage) {
+					setSubscriptionUsage(nextUsage);
+				} else if (!expectedProvider || !subscriptionUsage || subscriptionUsage.provider !== expectedProvider) {
+					setSubscriptionUsage(undefined);
+				}
+			})
+			.catch(() => {
+				if (refreshId === subscriptionRefreshId && (!expectedProvider || !subscriptionUsage)) {
+					setSubscriptionUsage(undefined);
+				}
+			});
 	};
 
 	pi.events.on("sub-core:ready", updateSubscriptionUsage);
