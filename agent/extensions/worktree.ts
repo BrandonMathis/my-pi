@@ -4,8 +4,8 @@
  *
  * Create/switch flow:
  *   1. /worktree [branch]  (branch arg optional; otherwise a compact action picker is shown)
- *   2. By default, enter a worktree name to create its branch from the tip of master.
- *      An alternate action lets you explicitly choose another base branch/ref.
+ *   2. By default, enter a worktree name to create its branch from the tip of master
+ *      or main. An alternate action lets you explicitly choose another base branch/ref.
  *   3. Worktree is created at <main-repo-root>/.pi/worktrees/<branch>.
  *   4. Choose to keep the current conversation context (session is forked into
  *      the worktree) or start fresh (empty session in the worktree).
@@ -39,7 +39,7 @@ type ReplacedCtx = Parameters<
 >[0];
 
 const EXCLUDE_PATTERN = ".pi/worktrees/";
-const CREATE_FROM_MASTER = "+ Create new worktree (from master)";
+const CREATE_FROM_DEFAULT = "+ Create new worktree (from master or main)";
 const CREATE_FROM_OTHER = "+ Create new worktree from another branch...";
 const REMOVE_WORKTREE = "- Remove a worktree...";
 const KEEP_CONTEXT = "Keep conversation context (fork session)";
@@ -384,7 +384,7 @@ export default function (pi: ExtensionAPI) {
 
 			// --- Pick an action without dumping every local and remote branch into the default UI ---
 			let choice = args?.trim() || undefined;
-			let creationBase: "master" | "choose" | undefined;
+			let creationBase: "default" | "choose" | undefined;
 			if (!choice) {
 				const existingWorktreeOptions = new Map<string, string>();
 				for (const wt of worktrees) {
@@ -393,7 +393,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const selected = await ctx.ui.select("Worktree:", [
-					CREATE_FROM_MASTER,
+					CREATE_FROM_DEFAULT,
 					CREATE_FROM_OTHER,
 					...existingWorktreeOptions.keys(),
 					REMOVE_WORKTREE,
@@ -404,8 +404,8 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				if (selected === CREATE_FROM_MASTER || selected === CREATE_FROM_OTHER) {
-					creationBase = selected === CREATE_FROM_MASTER ? "master" : "choose";
+				if (selected === CREATE_FROM_DEFAULT || selected === CREATE_FROM_OTHER) {
+					creationBase = selected === CREATE_FROM_DEFAULT ? "default" : "choose";
 					const name = await ctx.ui.input("New worktree name:", "feature/my-worktree");
 					if (!name?.trim()) return;
 					choice = name.trim();
@@ -429,18 +429,21 @@ export default function (pi: ExtensionAPI) {
 				branch = choice;
 				let baseRef: string | undefined;
 
-				if (creationBase === "master") {
-					const remoteMasters = remoteRefsForLocalBranch(remote, "master");
-					baseRef = local.includes("master")
-						? "master"
-						: remoteMasters.includes("origin/master")
-							? "origin/master"
-							: remoteMasters.length === 1
-								? remoteMasters[0]
-								: undefined;
+				if (creationBase === "default") {
+					for (const branchName of ["master", "main"]) {
+						const matchingRemoteRefs = remoteRefsForLocalBranch(remote, branchName);
+						baseRef = local.includes(branchName)
+							? branchName
+							: matchingRemoteRefs.includes(`origin/${branchName}`)
+								? `origin/${branchName}`
+								: matchingRemoteRefs.length === 1
+									? matchingRemoteRefs[0]
+									: undefined;
+						if (baseRef) break;
+					}
 					if (!baseRef) {
 						ctx.ui.notify(
-							"No unambiguous master branch was found. Choose 'Create new worktree from another branch...' instead.",
+							"No unambiguous master or main branch was found. Choose 'Create new worktree from another branch...' instead.",
 							"error",
 						);
 						return;
