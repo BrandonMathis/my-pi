@@ -1,7 +1,7 @@
 /**
  * macOS Completion Chime Extension
  *
- * Plays a macOS alert sound when Pi finishes an agent run.
+ * Plays a macOS alert sound when the main Pi agent finishes working.
  *
  * Commands:
  *   /chime             Open interactive sound picker. Press Space/P to demo, Enter to select.
@@ -368,12 +368,16 @@ async function openPicker(ctx: ExtensionContext): Promise<void> {
 }
 
 export default function macCompletionChime(pi: ExtensionAPI) {
+	// pi-subagents loads global extensions in child Pi processes and marks them
+	// with this environment variable. Do not register completion hooks there.
+	if (process.env.PI_SUBAGENT_CHILD === "1") return;
+
 	pi.on("session_start", async (_event, ctx) => {
 		config = await loadConfig();
 		setStatus(ctx);
 	});
 
-	pi.on("agent_end", async (_event, _ctx) => {
+	pi.on("agent_settled", async (_event, _ctx) => {
 		if (!isMac() || !config.enabled) return;
 
 		const now = Date.now();

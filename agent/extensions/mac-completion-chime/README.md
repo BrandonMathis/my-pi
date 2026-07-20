@@ -1,6 +1,6 @@
 # macOS Completion Chime
 
-Plays a macOS alert sound when Pi finishes an agent run. The chime is enabled by default.
+Plays a macOS alert sound when the main Pi agent finishes working. Sub-agent completions do not chime. The chime is enabled by default.
 
 ## Commands
 
