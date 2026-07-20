@@ -368,18 +368,24 @@ function formatResetDescription(date: Date): string {
 	return remainingHours > 0 ? `${days}d${remainingHours}h` : `${days}d`;
 }
 
-function getWindowLabel(windowSeconds?: number, fallbackWindowSeconds?: number): string {
-	const safeSeconds =
-		typeof windowSeconds === "number" && windowSeconds > 0
-			? windowSeconds
-			: typeof fallbackWindowSeconds === "number" && fallbackWindowSeconds > 0
-				? fallbackWindowSeconds
-				: 0;
-	if (!safeSeconds) return "0h";
-	const hours = Math.round(safeSeconds / 3600);
-	if (hours >= 144) return "Week";
-	if (hours >= 24) return "Day";
-	return `${hours}h`;
+function getWindowLabel(windowSeconds?: number): string | undefined {
+	if (typeof windowSeconds !== "number" || windowSeconds <= 0) return undefined;
+
+	const minutes = Math.round(windowSeconds / 60);
+	const namedWindows = [
+		{ minutes: 5 * 60, label: "5h" },
+		{ minutes: 24 * 60, label: "Daily" },
+		{ minutes: 7 * 24 * 60, label: "Weekly" },
+		{ minutes: 30 * 24 * 60, label: "Monthly" },
+		{ minutes: 365 * 24 * 60, label: "Annual" },
+	] as const;
+	const namedWindow = namedWindows.find(
+		(candidate) => minutes >= candidate.minutes * 0.95 && minutes <= candidate.minutes * 1.05,
+	);
+	if (namedWindow) return namedWindow.label;
+
+	const hours = Math.round(windowSeconds / 3600);
+	return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
 async function fetchJson(url: string, init: RequestInit): Promise<unknown | undefined> {
@@ -487,13 +493,13 @@ function pushCodexWindow(
 	windows: RateWindow[],
 	prefix: string | undefined,
 	window: Record<string, unknown> | undefined,
-	fallbackWindowSeconds?: number,
+	fallbackLabel: string,
 ): void {
 	if (!window) return;
 	const usedPercent = numberValue(window.used_percent) ?? 0;
 	const resetSeconds = numberValue(window.reset_at);
 	const resetDate = resetSeconds ? new Date(resetSeconds * 1000) : undefined;
-	const label = getWindowLabel(numberValue(window.limit_window_seconds), fallbackWindowSeconds);
+	const label = getWindowLabel(numberValue(window.limit_window_seconds)) ?? fallbackLabel;
 	windows.push({
 		label: prefix ? `${prefix} ${label}` : label,
 		usedPercent,
@@ -507,8 +513,10 @@ function pushCodexRateWindows(
 	rateLimit: Record<string, unknown> | undefined,
 	prefix?: string,
 ): void {
-	pushCodexWindow(windows, prefix, asRecord(rateLimit?.primary_window), 10800);
-	pushCodexWindow(windows, prefix, asRecord(rateLimit?.secondary_window), 86400);
+	// OpenAI supplies each window's duration. Do not infer a period when it is
+	// absent: Codex plans can expose 5-hour, daily, weekly, or other windows.
+	pushCodexWindow(windows, prefix, asRecord(rateLimit?.primary_window), "Usage");
+	pushCodexWindow(windows, prefix, asRecord(rateLimit?.secondary_window), "Secondary usage");
 }
 
 async function fetchCodexSubscriptionUsage(): Promise<SubscriptionUsage | undefined> {

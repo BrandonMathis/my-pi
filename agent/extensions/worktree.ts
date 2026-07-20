@@ -3,8 +3,9 @@
  * /worktree-remove - Remove a worktree (and optionally its branch).
  *
  * Create/switch flow:
- *   1. /worktree [branch]  (branch arg optional; otherwise a picker is shown)
- *   2. Pick an existing local/remote branch, or create a new branch.
+ *   1. /worktree [branch]  (branch arg optional; otherwise a compact action picker is shown)
+ *   2. By default, enter a worktree name to create its branch from the tip of master.
+ *      An alternate action lets you explicitly choose another base branch/ref.
  *   3. Worktree is created at <main-repo-root>/.pi/worktrees/<branch>.
  *   4. Choose to keep the current conversation context (session is forked into
  *      the worktree) or start fresh (empty session in the worktree).
@@ -38,7 +39,8 @@ type ReplacedCtx = Parameters<
 >[0];
 
 const EXCLUDE_PATTERN = ".pi/worktrees/";
-const CREATE_NEW = "+ Create new branch...";
+const CREATE_FROM_MASTER = "+ Create new worktree (from master)";
+const CREATE_FROM_OTHER = "+ Create new worktree from another branch...";
 const REMOVE_WORKTREE = "- Remove a worktree...";
 const KEEP_CONTEXT = "Keep conversation context (fork session)";
 const CLEAR_CONTEXT = "Start fresh (clear session context)";
@@ -123,14 +125,6 @@ export default function (pi: ExtensionAPI) {
 	async function describeRef(cwd: string, ref: string): Promise<string | undefined> {
 		const raw = await tryGit(cwd, ["log", "-1", "--format=%h  %s", ref]);
 		return raw || undefined;
-	}
-
-	/** Resolve what HEAD points at: branch name (or "detached") plus commit info. */
-	async function describeHead(cwd: string): Promise<{ label: string; detail?: string }> {
-		const headBranch = await tryGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-		const detail = await describeRef(cwd, "HEAD");
-		const label = headBranch ? `HEAD (current: ${headBranch})` : "HEAD (detached)";
-		return { label, detail };
 	}
 
 	/** Keep the worktrees dir out of git status without dirtying the repo. */
@@ -388,65 +382,88 @@ export default function (pi: ExtensionAPI) {
 				if (wt.branch) checkedOut.set(wt.branch, wt.path);
 			}
 
-			// --- Pick a branch ---
+			// --- Pick an action without dumping every local and remote branch into the default UI ---
 			let choice = args?.trim() || undefined;
+			let creationBase: "master" | "choose" | undefined;
 			if (!choice) {
-				const options: string[] = [];
-				for (const b of local) {
-					const wt = checkedOut.get(b);
-					options.push(wt ? `${b}  (worktree exists)` : b);
+				const existingWorktreeOptions = new Map<string, string>();
+				for (const wt of worktrees) {
+					if (!wt.branch || resolve(wt.path) === resolve(mainRoot)) continue;
+					existingWorktreeOptions.set(`${wt.branch}  (worktree exists)`, wt.branch);
 				}
-				for (const r of remote) {
-					const localName = remoteRefToLocalBranch(r);
-					if (!local.includes(localName)) options.push(`${r}  (remote)`);
-				}
-				options.push(CREATE_NEW);
-				options.push(REMOVE_WORKTREE);
 
-				const selected = await ctx.ui.select("Create worktree from branch:", options);
+				const selected = await ctx.ui.select("Worktree:", [
+					CREATE_FROM_MASTER,
+					CREATE_FROM_OTHER,
+					...existingWorktreeOptions.keys(),
+					REMOVE_WORKTREE,
+				]);
 				if (!selected) return; // cancelled
 				if (selected === REMOVE_WORKTREE) {
 					await removeWorktreeFlow(ctx);
 					return;
 				}
-				choice = selected.replace(/\s+\((worktree exists|remote)\)$/, "");
-				if (selected === CREATE_NEW) choice = CREATE_NEW;
+
+				if (selected === CREATE_FROM_MASTER || selected === CREATE_FROM_OTHER) {
+					creationBase = selected === CREATE_FROM_MASTER ? "master" : "choose";
+					const name = await ctx.ui.input("New worktree name:", "feature/my-worktree");
+					if (!name?.trim()) return;
+					choice = name.trim();
+				} else {
+					choice = existingWorktreeOptions.get(selected);
+					if (!choice) return;
+				}
 			}
 
 			// --- Resolve branch / create new ---
 			let branch: string;
 			let createArgs: string[] | undefined; // extra args for `git worktree add`
-			let baseDescription: string | undefined; // e.g. "main (a1b2c3d  fix: ...)"
+			let baseDescription: string | undefined; // e.g. "master — a1b2c3d  fix: ..."
 
-			if (choice === CREATE_NEW) {
-				const name = await ctx.ui.input("New branch name:", "feature/my-branch");
-				if (!name?.trim()) return;
-				branch = name.trim();
-				if (local.includes(branch)) {
+			if (local.includes(choice)) {
+				branch = choice;
+				if (creationBase) {
 					ctx.ui.notify(`Branch '${branch}' already exists; using it`, "info");
+				}
+			} else if (creationBase) {
+				branch = choice;
+				let baseRef: string | undefined;
+
+				if (creationBase === "master") {
+					const remoteMasters = remoteRefsForLocalBranch(remote, "master");
+					baseRef = local.includes("master")
+						? "master"
+						: remoteMasters.includes("origin/master")
+							? "origin/master"
+							: remoteMasters.length === 1
+								? remoteMasters[0]
+								: undefined;
+					if (!baseRef) {
+						ctx.ui.notify(
+							"No unambiguous master branch was found. Choose 'Create new worktree from another branch...' instead.",
+							"error",
+						);
+						return;
+					}
+					const detail = await describeRef(ctx.cwd, baseRef);
+					baseDescription = detail ? `${baseRef} — ${detail}` : baseRef;
 				} else {
-					// Base the new branch on a chosen ref (default: current HEAD).
-					// Each option shows what the base is: short SHA + latest commit subject.
-					const head = await describeHead(ctx.cwd);
 					const optionToRef = new Map<string, string>();
-					const headOption = head.detail ? `${head.label} — ${head.detail}` : head.label;
-					optionToRef.set(headOption, "HEAD");
 					for (const ref of [...local, ...remote]) {
 						const detail = await describeRef(ctx.cwd, ref);
 						optionToRef.set(detail ? `${ref} — ${detail}` : ref, ref);
 					}
-
-					const base = await ctx.ui.select(
+					const selectedBase = await ctx.ui.select(
 						`Base '${branch}' on which branch/ref?`,
 						[...optionToRef.keys()],
 					);
-					if (!base) return;
-					const baseRef = optionToRef.get(base) ?? "HEAD";
-					baseDescription = base;
-					createArgs = ["-b", branch, baseRef];
+					if (!selectedBase) return;
+					baseRef = optionToRef.get(selectedBase);
+					if (!baseRef) return;
+					baseDescription = selectedBase;
 				}
-			} else if (local.includes(choice)) {
-				branch = choice;
+
+				createArgs = ["-b", branch, baseRef];
 			} else if (remote.includes(choice)) {
 				// Fully-qualified remote branch, e.g. origin/feature/foo.
 				branch = remoteRefToLocalBranch(choice);
