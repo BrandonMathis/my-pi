@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 const FOLDER_ICON = "󰉋";
+const WORKTREE_ICON = ""; // nf-fa-tree
 const BURNT_ORANGE = "#CC5500";
 const WHITE = "#FFFFFF";
 const GREY = "#9CA3AF";
@@ -561,6 +562,22 @@ async function fetchSubscriptionUsageForContext(ctx: ExtensionContext): Promise<
 	return undefined;
 }
 
+function isLinkedGitWorktree(cwd: string): boolean {
+	try {
+		const [gitDir, commonDir] = execFileSync("git", ["rev-parse", "--git-dir", "--git-common-dir"], {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+		})
+			.trim()
+			.split("\n");
+		if (!gitDir || !commonDir) return false;
+		return resolve(cwd, gitDir) !== resolve(cwd, commonDir);
+	} catch {
+		return false;
+	}
+}
+
 function extractPrNumber(branch: string | null): string | null {
 	if (!branch) return null;
 	const patterns = [
@@ -744,6 +761,7 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		lastContext = ctx;
+		const isWorktree = isLinkedGitWorktree(ctx.sessionManager.getCwd());
 		refreshSubscriptionUsage(ctx, true);
 		if (!subscriptionRefreshInterval) {
 			subscriptionRefreshInterval = setInterval(() => {
@@ -788,7 +806,7 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 						separator: theme.fg("dim", " • "),
 						top: [
 							`${FOLDER_ICON} ${basename(cwd) || cwd}`,
-							branch && theme.fg("dim", `(${branch})`),
+							branch && theme.fg("dim", `(${isWorktree ? `${WORKTREE_ICON} ` : ""}${branch})`),
 							sessionTitle && theme.fg("dim", `• ${sessionTitle}`),
 							prNumber && hex(BURNT_ORANGE, `PR #${prNumber}`),
 						],
