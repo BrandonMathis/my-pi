@@ -30,6 +30,14 @@ type AutoSessionNameEntry = {
 type SubscriptionProvider = "anthropic" | "codex";
 type BillingMode = "api" | "subscription";
 
+type CodexFastState = {
+	enabled?: boolean;
+};
+
+type CodexFastRequest = {
+	reply: (state: CodexFastState) => void;
+};
+
 type RateWindow = {
 	label: string;
 	usedPercent: number;
@@ -555,6 +563,13 @@ function getContextSubscriptionProvider(ctx: ExtensionContext): SubscriptionProv
 	return undefined;
 }
 
+function modelSupportsCodexFastMode(ctx: ExtensionContext): boolean {
+	return (
+		ctx.model?.provider === "openai-codex" &&
+		/^gpt-5\.(?:4|5|6)(?:$|-)/.test(ctx.model.id)
+	);
+}
+
 async function fetchSubscriptionUsageForContext(ctx: ExtensionContext): Promise<SubscriptionUsage | undefined> {
 	const provider = getContextSubscriptionProvider(ctx);
 	if (provider === "anthropic") return fetchAnthropicSubscriptionUsage();
@@ -668,6 +683,7 @@ function renderModelStatus({
 	provider,
 	showProvider,
 	thinkingLevel,
+	fastMode,
 	dim,
 	bold,
 }: {
@@ -675,11 +691,13 @@ function renderModelStatus({
 	provider?: string;
 	showProvider: boolean;
 	thinkingLevel: string;
+	fastMode: boolean;
 	dim: (text: string) => string;
 	bold: (text: string) => string;
 }): string {
 	const providerPart = provider && showProvider ? dim(`(${provider}) `) : "";
-	return `${providerPart}${hex(WHITE, bold(modelId))}${colorizeThinkingLevel(thinkingLevel)}`;
+	const fastModePart = fastMode ? hex(YELLOW, " ⚡") : "";
+	return `${providerPart}${hex(WHITE, bold(modelId))}${fastModePart}${colorizeThinkingLevel(thinkingLevel)}`;
 }
 
 function fitLeftRight(left: string, right: string, width: number, minPadding = 2): string {
@@ -708,6 +726,7 @@ function assembleStatusBar({ width, top, left, right, separator }: StatusBarPart
 
 export default function customColoredFooter(pi: ExtensionAPI) {
 	let subscriptionUsage: SubscriptionUsage | undefined;
+	let codexFastEnabled = false;
 	let requestFooterRender: (() => void) | undefined;
 	let lastContext: ExtensionContext | undefined;
 	let subscriptionRefreshInterval: ReturnType<typeof setInterval> | undefined;
@@ -756,8 +775,16 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 			});
 	};
 
+	const updateCodexFastState = (state: unknown) => {
+		const enabled = (state as CodexFastState | undefined)?.enabled === true;
+		if (enabled === codexFastEnabled) return;
+		codexFastEnabled = enabled;
+		requestFooterRender?.();
+	};
+
 	pi.events.on("sub-core:ready", updateSubscriptionUsage);
 	pi.events.on("sub-core:update-current", updateSubscriptionUsage);
+	pi.events.on("codex-fast:state", updateCodexFastState);
 
 	pi.on("session_start", async (_event, ctx) => {
 		lastContext = ctx;
@@ -779,6 +806,9 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 				includeSettings: false,
 				reply: (payload: unknown) => updateSubscriptionUsage(payload),
 			});
+			pi.events.emit("codex-fast:request", {
+				reply: updateCodexFastState,
+			} satisfies CodexFastRequest);
 
 			return {
 				dispose: () => {
@@ -823,6 +853,7 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 							provider: ctx.model?.provider,
 							showProvider: footerData.getAvailableProviderCount() > 1,
 							thinkingLevel: pi.getThinkingLevel(),
+							fastMode: codexFastEnabled && modelSupportsCodexFastMode(ctx),
 							dim: (text) => theme.fg("dim", text),
 							bold: (text) => theme.bold(text),
 						}),

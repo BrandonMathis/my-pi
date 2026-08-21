@@ -10,7 +10,8 @@
  *   4. Choose to keep the current conversation context (session is forked into
  *      the worktree) or start fresh (empty session in the worktree).
  *   5. pi switches sessions; the new session's cwd is the worktree directory,
- *      so all tools/discovery now operate inside the worktree.
+ *      so all tools/discovery now operate inside the worktree. The session file
+ *      remains grouped with the main repository's sessions for easy resumption.
  *
  * Remove flow:
  *   1. /worktree-remove [branch]  (or pick "Remove a worktree..." in /worktree)
@@ -86,6 +87,11 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/** Default Pi session directory for a project without creating a session file. */
+	function getProjectSessionDir(projectRoot: string): string {
+		return SessionManager.create(projectRoot).getSessionDir();
 	}
 
 	/** Main repo root (works when invoked from inside another worktree too). */
@@ -167,6 +173,7 @@ export default function (pi: ExtensionAPI) {
 	async function switchPiToDir(
 		ctx: ExtensionCommandContext,
 		targetDir: string,
+		projectSessionDir: string,
 		keepContext: boolean,
 		afterSwitch?: (newCtx: ReplacedCtx) => Promise<void>,
 	): Promise<void> {
@@ -175,13 +182,13 @@ export default function (pi: ExtensionAPI) {
 
 		if (keepContext && currentSessionFile && existsSync(currentSessionFile)) {
 			// Fork the full session history into a new session whose cwd is the target dir
-			const forked = SessionManager.forkFrom(currentSessionFile, targetDir);
+			const forked = SessionManager.forkFrom(currentSessionFile, targetDir, projectSessionDir);
 			const file = forked.getSessionFile();
 			if (!file) throw new Error("Failed to fork session");
 			targetSessionFile = file;
 		} else {
 			// Fresh, empty session bound to the target dir
-			const fresh = SessionManager.create(targetDir);
+			const fresh = SessionManager.create(targetDir, projectSessionDir);
 			const file = fresh.getSessionFile();
 			const header = fresh.getHeader();
 			if (!file || !header) throw new Error("Failed to create session");
@@ -220,6 +227,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const mainRoot = await getMainRepoRoot(ctx.cwd);
+		const projectSessionDir = getProjectSessionDir(mainRoot);
 		const removable = (await listWorktrees(ctx.cwd)).filter(
 			(wt) => resolve(wt.path) !== resolve(mainRoot),
 		);
@@ -287,7 +295,7 @@ export default function (pi: ExtensionAPI) {
 			if (!contextChoice) return;
 
 			await ctx.waitForIdle();
-			await switchPiToDir(ctx, mainRoot, contextChoice === KEEP_CONTEXT, async (newCtx) => {
+			await switchPiToDir(ctx, mainRoot, projectSessionDir, contextChoice === KEEP_CONTEXT, async (newCtx) => {
 				// Old extension context is stale here; use gitSync + newCtx only.
 				try {
 					newCtx.ui.notify(removeWorktreeNow(mainRoot, targetPath, isDirty), "info");
@@ -372,6 +380,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mainRoot = await getMainRepoRoot(ctx.cwd);
+			const projectSessionDir = getProjectSessionDir(mainRoot);
 			const worktreesBase = join(mainRoot, ".pi", "worktrees");
 			const { local, remote } = await listBranches(ctx.cwd);
 			const worktrees = await listWorktrees(ctx.cwd);
@@ -553,7 +562,7 @@ export default function (pi: ExtensionAPI) {
 			// --- Switch ---
 			await ctx.waitForIdle();
 			try {
-				await switchPiToDir(ctx, worktreePath, contextChoice === KEEP_CONTEXT);
+				await switchPiToDir(ctx, worktreePath, projectSessionDir, contextChoice === KEEP_CONTEXT);
 			} catch (err) {
 				ctx.ui.notify(`Failed to switch session: ${err instanceof Error ? err.message : String(err)}`, "error");
 			}
