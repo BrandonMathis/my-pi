@@ -3,12 +3,6 @@ import { truncateToWidth, type EditorTheme, type TUI } from "@earendil-works/pi-
 
 const INPUT_BACKGROUND = "\x1b[48;2;48;48;60m"; // #30303c
 const IDLE_LABEL = " 󰒲 idle ";
-const WORKING_STATUS_FRAME_EVENT = "pi-working-phrase:frame";
-const WORKING_STATUS_STOP_EVENT = "pi-working-phrase:stop";
-
-type WorkingStatusFrame = {
-	text: string;
-};
 const RESET_BACKGROUND = "\x1b[49m";
 const BACKGROUND_RESET = /\x1b\[(?:0|49)m/g;
 
@@ -23,16 +17,17 @@ class InputBackgroundEditor extends CustomEditor {
 		tui: TUI,
 		theme: EditorTheme,
 		keybindings: KeybindingsManager,
-		private readonly getStatusLabel: () => string,
+		private readonly isIdle: () => boolean,
+		private readonly getIdleLabel: () => string,
 	) {
 		super(tui, theme, keybindings);
 	}
 
 	render(width: number): string[] {
 		const lines = super.render(width);
-		if (lines.length > 0) {
+		if (this.isIdle() && lines.length > 0) {
 			lines[0] = truncateToWidth(
-				`${this.borderColor("─")}${this.getStatusLabel()}${lines[0]}`,
+				`${this.borderColor("─")}${this.getIdleLabel()}${lines[0]}`,
 				width,
 				"",
 			);
@@ -42,39 +37,36 @@ class InputBackgroundEditor extends CustomEditor {
 }
 
 export default function (pi: ExtensionAPI) {
-	let workingStatus: string | undefined;
+	let idle = true;
 	let activeTui: TUI | undefined;
 
-	pi.events.on(WORKING_STATUS_FRAME_EVENT, (data) => {
-		const frame = data as WorkingStatusFrame;
-		if (typeof frame?.text !== "string") return;
-		workingStatus = frame.text;
+	pi.on("agent_start", () => {
+		idle = false;
 		activeTui?.requestRender();
 	});
 
-	pi.events.on(WORKING_STATUS_STOP_EVENT, () => {
-		workingStatus = undefined;
+	pi.on("agent_settled", () => {
+		idle = true;
 		activeTui?.requestRender();
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		workingStatus = undefined;
-		ctx.ui.setWorkingVisible(false);
+		idle = true;
 
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
 			activeTui = tui;
-			return new InputBackgroundEditor(tui, theme, keybindings, () =>
-				workingStatus
-					? ` ${workingStatus} `
-					: ctx.ui.theme.fg("muted", IDLE_LABEL),
+			return new InputBackgroundEditor(
+				tui,
+				theme,
+				keybindings,
+				() => idle,
+				() => ctx.ui.theme.fg("muted", IDLE_LABEL),
 			);
 		});
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
-		if (ctx.mode === "tui") ctx.ui.setWorkingVisible(true);
-		workingStatus = undefined;
+	pi.on("session_shutdown", () => {
 		activeTui = undefined;
 	});
 }

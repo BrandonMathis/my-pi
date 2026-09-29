@@ -4,9 +4,9 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 const PROVIDER = "openai-codex";
 // tmux preserves Ctrl/Alt/Shift extended-key modifiers, but not Super.
 const MODEL_SHORTCUTS = [
-	{ shortcuts: ["super+1", "ctrl+alt+1"], name: "Sol", id: "gpt-5.6-sol" },
-	{ shortcuts: ["super+2", "ctrl+alt+2"], name: "Terra", id: "gpt-5.6-terra" },
-	{ shortcuts: ["super+3", "ctrl+alt+3"], name: "Luna", id: "gpt-5.6-luna" },
+	{ shortcuts: ["super+1", "ctrl+alt+1"], name: "Astra", id: "gpt-6-astra" },
+	{ shortcuts: ["super+2", "ctrl+alt+2"], name: "Sol", id: "gpt-6-sol" },
+	{ shortcuts: ["super+3", "ctrl+alt+3"], name: "Luna", id: "gpt-6-luna" },
 ] as const;
 const THINKING_BACKWARD_SHORTCUT = "ctrl+shift+tab";
 
@@ -53,7 +53,7 @@ export default function piControlHotkeys(pi: ExtensionAPI) {
 	for (const model of MODEL_SHORTCUTS) {
 		for (const shortcut of model.shortcuts) {
 			pi.registerShortcut(shortcut, {
-				description: `Select GPT-5.6 ${model.name}`,
+				description: `Select GPT-6 ${model.name}`,
 				handler: (ctx) => selectModel(ctx, model.name, model.id),
 			});
 		}
