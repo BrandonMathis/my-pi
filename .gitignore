@@ -3,10 +3,12 @@
 
 # Keep repository ignore rules tracked
 !.gitignore
+!/AGENTS.md
 
 # Keep only agent extensions tracked
 !agent/
 agent/*
+!agent/keybindings.json
 !agent/extensions/
 !agent/extensions/**
 

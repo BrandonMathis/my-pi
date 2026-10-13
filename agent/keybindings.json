@@ -1,0 +1,5 @@
+{
+  "tui.input.newLine": ["shift+enter", "ctrl+j"],
+  "app.message.followUp": ["alt+enter"],
+  "tui.altScreen.bottom": ["super+down", "alt+down"]
+}
