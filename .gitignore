@@ -8,6 +8,7 @@
 # Keep only agent extensions tracked
 !agent/
 agent/*
+!agent/settings.json
 !agent/keybindings.json
 !agent/extensions/
 !agent/extensions/**

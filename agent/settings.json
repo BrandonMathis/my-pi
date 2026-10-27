@@ -1,0 +1,20 @@
+{
+  "lastChangelogVersion": "1.4.0",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6.1-sol",
+  "defaultThinkingLevel": "high",
+  "theme": "dark",
+  "packages": [
+    "npm:@aliou/pi-guardrails",
+    "npm:pi-extension-manager",
+    "npm:pi-web-access",
+    "npm:pi-subagents",
+    "npm:@juicesharp/rpiv-todo",
+    "../../Dev/pi-working-phrase",
+    "npm:pi-fff"
+  ],
+  "hideThinkingBlock": false,
+  "compaction": {
+    "enabled": false
+  }
+}
