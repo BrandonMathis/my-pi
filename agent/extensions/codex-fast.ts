@@ -3,46 +3,74 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "codex-fast.json");
-const FAST_STATE_EVENT = "codex-fast:state";
-const FAST_REQUEST_EVENT = "codex-fast:request";
+const CONFIG_PATH = join(homedir(), ".pi", "agent", "fast-mode.json");
+const FAST_STATE_EVENT = "fast-mode:state";
+const FAST_REQUEST_EVENT = "fast-mode:request";
 
 type FastModeConfig = {
-	enabled: boolean;
+	codex: boolean;
+	anthropic: boolean;
 };
 
 type FastModeRequest = {
 	reply?: (state: FastModeConfig) => void;
 };
 
-function loadFastModeEnabled(): boolean {
+function loadFastModeConfig(): FastModeConfig {
 	try {
-		if (!existsSync(CONFIG_PATH)) return false;
+		if (!existsSync(CONFIG_PATH)) {
+			// Try to migrate from old codex-fast.json
+			const oldPath = join(homedir(), ".pi", "agent", "codex-fast.json");
+			if (existsSync(oldPath)) {
+				const oldConfig = JSON.parse(readFileSync(oldPath, "utf-8")) as { enabled?: boolean };
+				return { codex: oldConfig.enabled === true, anthropic: false };
+			}
+			return { codex: false, anthropic: false };
+		}
 		const config = JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as Partial<FastModeConfig>;
-		return config.enabled === true;
+		return {
+			codex: config.codex === true,
+			anthropic: config.anthropic === true,
+		};
 	} catch {
-		return false;
+		return { codex: false, anthropic: false };
 	}
 }
 
-function saveFastModeEnabled(enabled: boolean): void {
+function saveFastModeConfig(config: FastModeConfig): void {
 	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-	writeFileSync(CONFIG_PATH, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf-8");
+	writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+}
+
+function getActiveProvider(ctx: ExtensionContext): "codex" | "anthropic" | null {
+	if (ctx.model?.provider === "openai-codex") return "codex";
+	if (ctx.model?.provider === "anthropic") return "anthropic";
+	return null;
 }
 
 function modelSupportsFastMode(ctx: ExtensionContext): boolean {
-	return (
-		ctx.model?.provider === "openai-codex" &&
-		/^gpt-5\.(?:4|5|6)(?:$|-)/.test(ctx.model.id)
-	);
+	const provider = getActiveProvider(ctx);
+	if (provider === "codex") {
+		return /^gpt-5\.(?:4|5|6)(?:$|-)/.test(ctx.model?.id ?? "");
+	}
+	if (provider === "anthropic") {
+		// Anthropic doesn't have a documented priority tier yet,
+		// but we support the toggle for future use
+		return true;
+	}
+	return false;
 }
 
-export default function codexFast(pi: ExtensionAPI) {
-	let enabled = loadFastModeEnabled();
+export default function fastMode(pi: ExtensionAPI) {
+	let config = loadFastModeConfig();
 
-	const state = (): FastModeConfig => ({ enabled });
+	const state = (): FastModeConfig => config;
 	const publishState = () => pi.events.emit(FAST_STATE_EVENT, state());
-	const isActive = (ctx: ExtensionContext) => enabled && modelSupportsFastMode(ctx);
+	const isActive = (ctx: ExtensionContext) => {
+		const provider = getActiveProvider(ctx);
+		if (!provider || !modelSupportsFastMode(ctx)) return false;
+		return config[provider] === true;
+	};
 
 	pi.events.on(FAST_REQUEST_EVENT, (payload: unknown) => {
 		const request = payload as FastModeRequest | undefined;
@@ -50,13 +78,22 @@ export default function codexFast(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("fast", {
-		description: "Toggle Codex fast mode: /fast [on|off|status]",
+		description: "Toggle fast mode for active provider: /fast [on|off|status]",
 		handler: async (args, ctx) => {
-			const action = args.trim().toLowerCase() || (enabled ? "off" : "on");
+			const provider = getActiveProvider(ctx);
+			
+			if (!provider) {
+				ctx.ui.notify("Fast mode not supported for current provider", "warning");
+				return;
+			}
+
+			const currentEnabled = config[provider];
+			const action = args.trim().toLowerCase() || (currentEnabled ? "off" : "on");
 
 			if (action === "status") {
-				const suffix = enabled && !modelSupportsFastMode(ctx) ? " (current model unsupported)" : "";
-				ctx.ui.notify(`Codex fast mode is ${enabled ? "on" : "off"}${suffix}`, "info");
+				const providerName = provider === "codex" ? "Codex" : "Anthropic";
+				const suffix = currentEnabled && !modelSupportsFastMode(ctx) ? " (current model unsupported)" : "";
+				ctx.ui.notify(`${providerName} fast mode is ${currentEnabled ? "on" : "off"}${suffix}`, "info");
 				return;
 			}
 
@@ -65,16 +102,18 @@ export default function codexFast(pi: ExtensionAPI) {
 				return;
 			}
 
-			enabled = action === "on";
+			config[provider] = action === "on";
 			try {
-				saveFastModeEnabled(enabled);
+				saveFastModeConfig(config);
 			} catch (error) {
-				ctx.ui.notify(`Could not save Codex fast mode: ${String(error)}`, "warning");
+				ctx.ui.notify(`Could not save fast mode: ${String(error)}`, "warning");
 			}
 			publishState();
 
+			const providerName = provider === "codex" ? "Codex" : "Anthropic";
+			const enabled = config[provider];
 			const suffix = enabled && !modelSupportsFastMode(ctx) ? "; current model is unsupported" : "";
-			ctx.ui.notify(`Codex fast mode ${enabled ? "enabled" : "disabled"}${suffix}`, "info");
+			ctx.ui.notify(`${providerName} fast mode ${enabled ? "enabled" : "disabled"}${suffix}`, "info");
 		},
 	});
 
@@ -82,7 +121,12 @@ export default function codexFast(pi: ExtensionAPI) {
 
 	pi.on("before_provider_headers", (event, ctx) => {
 		if (!isActive(ctx) || !ctx.model) return;
-		event.headers["x-codex-routing-hint"] = `model=${ctx.model.id};tier=priority`;
+		
+		const provider = getActiveProvider(ctx);
+		if (provider === "codex") {
+			event.headers["x-codex-routing-hint"] = `model=${ctx.model.id};tier=priority`;
+		}
+		// Anthropic doesn't currently have priority tier headers
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
@@ -90,9 +134,13 @@ export default function codexFast(pi: ExtensionAPI) {
 			return;
 		}
 
-		return {
-			...(event.payload as Record<string, unknown>),
-			service_tier: "priority",
-		};
+		const provider = getActiveProvider(ctx);
+		if (provider === "codex") {
+			return {
+				...(event.payload as Record<string, unknown>),
+				service_tier: "priority",
+			};
+		}
+		// Anthropic: When they release priority tier support, add it here
 	});
 }

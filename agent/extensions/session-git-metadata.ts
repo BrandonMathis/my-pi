@@ -6,6 +6,7 @@
  * export the current conversation branch using the saved git metadata.
  */
 
+import { spawnSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -52,6 +53,7 @@ type SessionEntryLike = {
 const CUSTOM_TYPE = "session-git-metadata";
 const DEFAULT_EXPORT_DIR = ".pi/exports";
 const EXPORT_COMMAND = "export-branch-conversation";
+const DIFF_COMMAND = "diff";
 
 /**
  * Returns the latest metadata entry already stored for this session, if any.
@@ -250,6 +252,43 @@ export default function sessionGitMetadataExtension(pi: ExtensionAPI) {
 		if (!metadata) return;
 
 		pi.appendEntry(CUSTOM_TYPE, metadata);
+	});
+
+	pi.registerCommand(DIFF_COMMAND, {
+		description: "View changes made since this Pi session started in Neovim diff",
+		handler: async (_args, ctx) => {
+			await ctx.waitForIdle();
+
+			const metadata = getExistingMetadata(ctx.sessionManager.getEntries() as SessionEntryLike[]);
+			if (!metadata?.sha) {
+				ctx.ui.notify("No saved git baseline found for this session", "error");
+				return;
+			}
+
+			// Exit code 1 means differences were found; other non-zero codes are errors.
+			const diffCheck = await pi.exec("git", ["diff", "--quiet", metadata.sha, "--"], {
+				cwd: ctx.cwd,
+				timeout: 5_000,
+			});
+			if (diffCheck.code === 0) {
+				ctx.ui.notify("No tracked changes since this session started", "info");
+				return;
+			}
+			if (diffCheck.code !== 1) {
+				ctx.ui.notify(diffCheck.stderr.trim() || `git diff failed (exit ${diffCheck.code})`, "error");
+				return;
+			}
+
+			const result = spawnSync("git", ["difftool", "--no-prompt", "--tool=nvimdiff", metadata.sha, "--"], {
+				cwd: ctx.cwd,
+				stdio: "inherit",
+			});
+			if (result.error) {
+				ctx.ui.notify(`Could not open Neovim diff: ${result.error.message}`, "error");
+			} else if (result.status !== 0) {
+				ctx.ui.notify(`Neovim diff exited with status ${result.status ?? "unknown"}`, "error");
+			}
+		},
 	});
 
 	pi.registerCommand(EXPORT_COMMAND, {
