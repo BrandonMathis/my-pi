@@ -5,7 +5,8 @@
  * Create/switch flow:
  *   1. /worktree [branch]  (branch arg optional; otherwise a compact action picker is shown)
  *   2. By default, enter a worktree name to create its branch from the tip of master
- *      or main. An alternate action lets you explicitly choose another base branch/ref.
+ *      or main. An alternate action opens a searchable existing-branch picker
+ *      and creates a worktree for the selected local or remote branch.
  *   3. Worktree is created at <main-repo-root>/.pi/worktrees/<branch>.
  *   4. Choose to keep the current conversation context (session is forked into
  *      the worktree) or start fresh (empty session in the worktree).
@@ -28,6 +29,7 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { Container, Input, SelectList, Text } from "@earendil-works/pi-tui";
 
 interface WorktreeInfo {
 	path: string;
@@ -103,11 +105,12 @@ export default function (pi: ExtensionAPI) {
 
 	async function listBranches(cwd: string): Promise<{ local: string[]; remote: string[] }> {
 		const localRaw = (await tryGit(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])) ?? "";
-		const remoteRaw = (await tryGit(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"])) ?? "";
+		const remoteRaw = (await tryGit(cwd, ["for-each-ref", "--format=%(refname)", "refs/remotes"])) ?? "";
 		const local = localRaw.split("\n").filter(Boolean);
 		const remote = remoteRaw
 			.split("\n")
 			.filter(Boolean)
+			.map((ref) => ref.replace(/^refs\/remotes\//, ""))
 			.filter((r) => !r.endsWith("/HEAD"));
 		return { local, remote };
 	}
@@ -167,6 +170,71 @@ export default function (pi: ExtensionAPI) {
 
 	function sanitizeBranchForPath(branch: string): string {
 		return branch.replace(/[^A-Za-z0-9._-]+/g, "-");
+	}
+
+	/** Pick an existing branch without prompting for a new branch name. */
+	async function pickBranch(
+		ctx: ExtensionCommandContext,
+		local: string[],
+		remote: string[],
+		checkedOut: Map<string, string>,
+	): Promise<string | undefined> {
+		const refs = [...local, ...remote];
+		if (refs.length === 0) {
+			ctx.ui.notify("No existing branches found", "info");
+			return undefined;
+		}
+		// RPC clients support standard dialogs, but not custom terminal components.
+		if (ctx.mode !== "tui") return ctx.ui.select("Choose a branch for the worktree:", refs);
+
+		return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
+			const container = new Container();
+			const search = new Input({ placeholder: "Type to filter branches…" });
+			const items = refs.map((ref) => {
+				const branch = local.includes(ref) ? ref : remoteRefToLocalBranch(ref);
+				return {
+					value: ref,
+					label: ref,
+					description: checkedOut.has(branch)
+						? "already checked out"
+						: local.includes(ref) ? "local branch" : "remote branch",
+				};
+			});
+			const list = new SelectList(items, 10, {
+				selectedPrefix: (text) => theme.fg("accent", text),
+				selectedText: (text) => theme.fg("accent", text),
+				description: (text) => theme.fg("muted", text),
+				scrollInfo: (text) => theme.fg("dim", text),
+				noMatch: (text) => theme.fg("warning", text),
+			});
+			list.onSelect = (item) => done(item.value);
+			list.onCancel = () => done(undefined);
+			container.addChild(new Text(theme.fg("accent", theme.bold("Choose a branch for the worktree"))));
+			container.addChild(search);
+			container.addChild(list);
+			container.addChild(new Text(theme.fg("dim", "Type to filter · ↑↓ navigate · enter select · esc cancel")));
+
+			return {
+				get focused() { return search.focused; },
+				set focused(value: boolean) { search.focused = value; },
+				render: (width: number) => container.render(width),
+				invalidate: () => container.invalidate(),
+				handleInput(data: string) {
+					if (
+						keybindings.matches(data, "tui.select.up") ||
+						keybindings.matches(data, "tui.select.down") ||
+						keybindings.matches(data, "tui.select.confirm") ||
+						keybindings.matches(data, "tui.select.cancel")
+					) {
+						list.handleInput(data);
+					} else {
+						search.handleInput(data);
+						list.setFilter(search.getValue().trim());
+					}
+					tui.requestRender();
+				},
+			};
+		});
 	}
 
 	/** Create a session file bound to `targetDir`, then switch pi to it. */
@@ -393,7 +461,7 @@ export default function (pi: ExtensionAPI) {
 
 			// --- Pick an action without dumping every local and remote branch into the default UI ---
 			let choice = args?.trim() || undefined;
-			let creationBase: "default" | "choose" | undefined;
+			let createFromDefault = false;
 			if (!choice) {
 				const existingWorktreeOptions = new Map<string, string>();
 				for (const wt of worktrees) {
@@ -413,8 +481,11 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				if (selected === CREATE_FROM_DEFAULT || selected === CREATE_FROM_OTHER) {
-					creationBase = selected === CREATE_FROM_DEFAULT ? "default" : "choose";
+				if (selected === CREATE_FROM_OTHER) {
+					choice = await pickBranch(ctx, local, remote, checkedOut);
+					if (!choice) return;
+				} else if (selected === CREATE_FROM_DEFAULT) {
+					createFromDefault = true;
 					const name = await ctx.ui.input("New worktree name:", "feature/my-worktree");
 					if (!name?.trim()) return;
 					choice = name.trim();
@@ -431,50 +502,32 @@ export default function (pi: ExtensionAPI) {
 
 			if (local.includes(choice)) {
 				branch = choice;
-				if (creationBase) {
+				if (createFromDefault) {
 					ctx.ui.notify(`Branch '${branch}' already exists; using it`, "info");
 				}
-			} else if (creationBase) {
+			} else if (createFromDefault) {
 				branch = choice;
 				let baseRef: string | undefined;
-
-				if (creationBase === "default") {
-					for (const branchName of ["master", "main"]) {
-						const matchingRemoteRefs = remoteRefsForLocalBranch(remote, branchName);
-						baseRef = local.includes(branchName)
-							? branchName
-							: matchingRemoteRefs.includes(`origin/${branchName}`)
-								? `origin/${branchName}`
-								: matchingRemoteRefs.length === 1
-									? matchingRemoteRefs[0]
-									: undefined;
-						if (baseRef) break;
-					}
-					if (!baseRef) {
-						ctx.ui.notify(
-							"No unambiguous master or main branch was found. Choose 'Create new worktree from another branch...' instead.",
-							"error",
-						);
-						return;
-					}
-					const detail = await describeRef(ctx.cwd, baseRef);
-					baseDescription = detail ? `${baseRef} — ${detail}` : baseRef;
-				} else {
-					const optionToRef = new Map<string, string>();
-					for (const ref of [...local, ...remote]) {
-						const detail = await describeRef(ctx.cwd, ref);
-						optionToRef.set(detail ? `${ref} — ${detail}` : ref, ref);
-					}
-					const selectedBase = await ctx.ui.select(
-						`Base '${branch}' on which branch/ref?`,
-						[...optionToRef.keys()],
-					);
-					if (!selectedBase) return;
-					baseRef = optionToRef.get(selectedBase);
-					if (!baseRef) return;
-					baseDescription = selectedBase;
+				for (const branchName of ["master", "main"]) {
+					const matchingRemoteRefs = remoteRefsForLocalBranch(remote, branchName);
+					baseRef = local.includes(branchName)
+						? branchName
+						: matchingRemoteRefs.includes(`origin/${branchName}`)
+							? `origin/${branchName}`
+							: matchingRemoteRefs.length === 1
+								? matchingRemoteRefs[0]
+								: undefined;
+					if (baseRef) break;
 				}
-
+				if (!baseRef) {
+					ctx.ui.notify(
+						"No unambiguous master or main branch was found. Choose 'Create new worktree from another branch...' instead.",
+						"error",
+					);
+					return;
+				}
+				const detail = await describeRef(ctx.cwd, baseRef);
+				baseDescription = detail ? `${baseRef} — ${detail}` : baseRef;
 				createArgs = ["-b", branch, baseRef];
 			} else if (remote.includes(choice)) {
 				// Fully-qualified remote branch, e.g. origin/feature/foo.
