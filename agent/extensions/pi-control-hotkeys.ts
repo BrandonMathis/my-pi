@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
 const PROVIDER = "openai-codex";
 // tmux preserves Ctrl/Alt/Shift extended-key modifiers, but not Super.
