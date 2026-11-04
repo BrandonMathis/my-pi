@@ -4,9 +4,9 @@
   "defaultModel": "gpt-6.1-sol",
   "defaultThinkingLevel": "high",
   "theme": "dark",
-  "showHardwareCursor": true,
+  "showHardwareCursor": false,
   "extensions": [
-    "-extensions/focus-cursor.ts"
+    "+extensions/focus-cursor.ts"
   ],
   "packages": [
     "npm:@aliou/pi-guardrails",
