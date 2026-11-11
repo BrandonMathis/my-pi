@@ -607,8 +607,8 @@ export default function (pi: ExtensionAPI) {
 
 			// --- Keep or clear context ---
 			const contextChoice = await ctx.ui.select("Session context for the worktree:", [
-				KEEP_CONTEXT,
 				CLEAR_CONTEXT,
+				KEEP_CONTEXT,
 			]);
 			if (!contextChoice) return; // cancelled
 

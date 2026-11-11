@@ -85,7 +85,7 @@ function fixture(t, options = {}) {
 				if (title === "Worktree:") return options.action ?? OTHER;
 				if (title === "Choose a branch for the worktree:") return options.branch;
 				assert.equal(title, "Session context for the worktree:");
-				return options.switch ? "Start fresh (clear session context)" : undefined;
+				return options.switch ? items[0] : undefined;
 			},
 			async custom(factory) {
 				let completed = false;
@@ -182,11 +182,16 @@ test("a branch checked out in the main tree is not checked out twice", async (t)
 	assert.ok(f.notifications.some(({ message, level }) => level === "error" && message.includes("main working tree")));
 });
 
-test("default creation still asks for a new name and bases it on main", async (t) => {
-	const f = fixture(t, { action: DEFAULT, name: "feature/new" });
+test("default creation asks for a name, bases it on main, and defaults to a fresh session", async (t) => {
+	const f = fixture(t, { action: DEFAULT, name: "feature/new", switch: true });
 	await f.run();
 	assert.equal(f.git("-C", f.worktree("feature/new"), "branch", "--show-current"), "feature/new");
 	assert.equal(f.git("rev-parse", "feature/new"), f.git("rev-parse", "main"));
+	assert.deepEqual(f.selections.find(({ title }) => title === "Session context for the worktree:").items, [
+		"Start fresh (clear session context)",
+		"Keep conversation context (fork session)",
+	]);
+	assert.equal(JSON.parse(readFileSync(f.session(), "utf8").trim()).cwd, f.worktree("feature/new"));
 });
 
 test("RPC uses a standard existing-branch dialog", async (t) => {
