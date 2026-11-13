@@ -4,6 +4,12 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import {
+	type ProviderUsageEntry,
+	type UsageFetchOutcome,
+	readProviderUsage,
+	refreshSharedUsage,
+} from "./lib/subscription-usage-cache.ts";
 
 const FOLDER_ICON = "󰉋";
 const WORKTREE_ICON = ""; // nf-fa-tree
@@ -397,15 +403,38 @@ function getWindowLabel(windowSeconds?: number): string | undefined {
 	return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
-async function fetchJson(url: string, init: RequestInit): Promise<unknown | undefined> {
+type JsonFetchResult =
+	| { ok: true; data: unknown }
+	| { ok: false; error: Extract<UsageFetchOutcome<never>, { kind: "error" }> };
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+	if (!value) return undefined;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds)) return seconds > 0 ? seconds * 1000 : undefined;
+	const date = Date.parse(value);
+	return Number.isFinite(date) && date > Date.now() ? date - Date.now() : undefined;
+}
+
+async function fetchJson(url: string, init: RequestInit): Promise<JsonFetchResult> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 8000);
 	try {
 		const response = await fetch(url, { ...init, signal: controller.signal });
-		if (!response.ok) return undefined;
-		return await response.json();
+		if (!response.ok) {
+			await response.body?.cancel();
+			return {
+				ok: false,
+				error: {
+					kind: "error",
+					status: response.status,
+					retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+				},
+			};
+		}
+		return { ok: true, data: await response.json() };
 	} catch {
-		return undefined;
+		// Do not keep raw errors: provider messages may echo credentials.
+		return { ok: false, error: { kind: "error", message: "network error or timeout" } };
 	} finally {
 		clearTimeout(timeout);
 	}
@@ -463,19 +492,21 @@ function loadCodexCredentials(): { accessToken?: string; accountId?: string } {
 	};
 }
 
-async function fetchAnthropicSubscriptionUsage(): Promise<SubscriptionUsage | undefined> {
-	const token = loadAnthropicToken();
-	if (!token) return undefined;
+const EMPTY_USAGE_ERROR = { kind: "error", message: "no usage windows in response" } as const;
 
-	const data = asRecord(
-		await fetchJson("https://api.anthropic.com/api/oauth/usage", {
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"anthropic-beta": "oauth-2025-04-20",
-			},
-		}),
-	);
-	if (!data) return undefined;
+async function fetchAnthropicSubscriptionUsage(): Promise<UsageFetchOutcome<SubscriptionUsage>> {
+	const token = loadAnthropicToken();
+	if (!token) return { kind: "skipped" };
+
+	const result = await fetchJson("https://api.anthropic.com/api/oauth/usage", {
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"anthropic-beta": "oauth-2025-04-20",
+		},
+	});
+	if (!result.ok) return result.error;
+	const data = asRecord(result.data);
+	if (!data) return EMPTY_USAGE_ERROR;
 
 	const windows: RateWindow[] = [];
 	for (const [key, label] of [
@@ -495,7 +526,7 @@ async function fetchAnthropicSubscriptionUsage(): Promise<SubscriptionUsage | un
 		});
 	}
 
-	return windows.length > 0 ? { provider: "anthropic", windows } : undefined;
+	return windows.length > 0 ? { kind: "ok", usage: { provider: "anthropic", windows } } : EMPTY_USAGE_ERROR;
 }
 
 function pushCodexWindow(
@@ -528,9 +559,9 @@ function pushCodexRateWindows(
 	pushCodexWindow(windows, prefix, asRecord(rateLimit?.secondary_window), "Secondary usage");
 }
 
-async function fetchCodexSubscriptionUsage(): Promise<SubscriptionUsage | undefined> {
+async function fetchCodexSubscriptionUsage(): Promise<UsageFetchOutcome<SubscriptionUsage>> {
 	const { accessToken, accountId } = loadCodexCredentials();
-	if (!accessToken) return undefined;
+	if (!accessToken) return { kind: "skipped" };
 
 	const headers: Record<string, string> = {
 		Authorization: `Bearer ${accessToken}`,
@@ -538,8 +569,10 @@ async function fetchCodexSubscriptionUsage(): Promise<SubscriptionUsage | undefi
 	};
 	if (accountId) headers["ChatGPT-Account-Id"] = accountId;
 
-	const data = asRecord(await fetchJson("https://chatgpt.com/backend-api/wham/usage", { headers }));
-	if (!data) return undefined;
+	const result = await fetchJson("https://chatgpt.com/backend-api/wham/usage", { headers });
+	if (!result.ok) return result.error;
+	const data = asRecord(result.data);
+	if (!data) return EMPTY_USAGE_ERROR;
 
 	const windows: RateWindow[] = [];
 	pushCodexRateWindows(windows, asRecord(data.rate_limit));
@@ -552,7 +585,7 @@ async function fetchCodexSubscriptionUsage(): Promise<SubscriptionUsage | undefi
 		pushCodexRateWindows(windows, asRecord(entry.rate_limit), prefix);
 	}
 
-	return windows.length > 0 ? { provider: "codex", windows } : undefined;
+	return windows.length > 0 ? { kind: "ok", usage: { provider: "codex", windows } } : EMPTY_USAGE_ERROR;
 }
 
 function getContextSubscriptionProvider(ctx: ExtensionContext): SubscriptionProvider | undefined {
@@ -570,11 +603,25 @@ function modelSupportsCodexFastMode(ctx: ExtensionContext): boolean {
 	);
 }
 
-async function fetchSubscriptionUsageForContext(ctx: ExtensionContext): Promise<SubscriptionUsage | undefined> {
-	const provider = getContextSubscriptionProvider(ctx);
-	if (provider === "anthropic") return fetchAnthropicSubscriptionUsage();
-	if (provider === "codex") return fetchCodexSubscriptionUsage();
-	return undefined;
+const SUBSCRIPTION_USAGE_FETCHERS: Record<SubscriptionProvider, () => Promise<UsageFetchOutcome<SubscriptionUsage>>> = {
+	anthropic: fetchAnthropicSubscriptionUsage,
+	codex: fetchCodexSubscriptionUsage,
+};
+
+/** Validate usage read back from the shared cache file (written by any pi process). */
+function getCachedSubscriptionUsage(
+	provider: SubscriptionProvider,
+	entry: ProviderUsageEntry<unknown> | undefined,
+): SubscriptionUsage | undefined {
+	const usage = asRecord(entry?.usage);
+	if (!usage || usage.provider !== provider || !Array.isArray(usage.windows)) return undefined;
+	const windows = usage.windows.flatMap((value): RateWindow[] => {
+		const window = normalizeRateWindow(value);
+		if (!window) return [];
+		const resetAt = stringValue(asRecord(value)?.resetAt);
+		return [resetAt ? { ...window, resetAt } : window];
+	});
+	return windows.length > 0 ? { provider, windows } : undefined;
 }
 
 function isLinkedGitWorktree(cwd: string): boolean {
@@ -730,7 +777,6 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 	let requestFooterRender: (() => void) | undefined;
 	let lastContext: ExtensionContext | undefined;
 	let subscriptionRefreshInterval: ReturnType<typeof setInterval> | undefined;
-	let lastSubscriptionRefreshAt = 0;
 	let subscriptionRefreshId = 0;
 
 	const setSubscriptionUsage = (nextUsage: SubscriptionUsage | undefined) => {
@@ -746,32 +792,35 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 		setSubscriptionUsage(getSubscriptionUsageFromPayload(payload));
 	};
 
-	const refreshSubscriptionUsage = (ctx: ExtensionContext, force = false) => {
-		const billingMode = getContextBillingMode(ctx);
-		if (billingMode !== "subscription") {
+	// Usage lives in a JSON cache shared by every pi process. Calling this is cheap:
+	// it shows the cached value right away and only hits the provider endpoint when
+	// the cache is stale, the provider is not backing off, and no other process is
+	// already fetching (see lib/subscription-usage-cache.ts).
+	const refreshSubscriptionUsage = (ctx: ExtensionContext) => {
+		const provider = getContextSubscriptionProvider(ctx);
+		if (getContextBillingMode(ctx) !== "subscription" || !provider) {
 			subscriptionRefreshId += 1;
 			if (subscriptionUsage) setSubscriptionUsage(undefined);
 			return;
 		}
 
-		const now = Date.now();
-		if (!force && now - lastSubscriptionRefreshAt < 60_000) return;
-		lastSubscriptionRefreshAt = now;
-		const expectedProvider = getContextSubscriptionProvider(ctx);
+		const cached = getCachedSubscriptionUsage(provider, readProviderUsage(provider));
+		if (cached) {
+			setSubscriptionUsage(cached);
+		} else if (subscriptionUsage && subscriptionUsage.provider !== provider) {
+			setSubscriptionUsage(undefined);
+		}
+
 		const refreshId = ++subscriptionRefreshId;
-		void fetchSubscriptionUsageForContext(ctx)
-			.then((nextUsage) => {
+		void refreshSharedUsage(provider, SUBSCRIPTION_USAGE_FETCHERS[provider])
+			.then((entry) => {
 				if (refreshId !== subscriptionRefreshId) return;
-				if (nextUsage) {
-					setSubscriptionUsage(nextUsage);
-				} else if (!expectedProvider || !subscriptionUsage || subscriptionUsage.provider !== expectedProvider) {
-					setSubscriptionUsage(undefined);
-				}
+				// Keep showing the last known value when a fetch fails.
+				const nextUsage = getCachedSubscriptionUsage(provider, entry);
+				if (nextUsage) setSubscriptionUsage(nextUsage);
 			})
 			.catch(() => {
-				if (refreshId === subscriptionRefreshId && (!expectedProvider || !subscriptionUsage)) {
-					setSubscriptionUsage(undefined);
-				}
+				// Cache I/O failures are non-fatal; the next tick retries.
 			});
 	};
 
@@ -789,7 +838,7 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		lastContext = ctx;
 		const isWorktree = isLinkedGitWorktree(ctx.sessionManager.getCwd());
-		refreshSubscriptionUsage(ctx, true);
+		refreshSubscriptionUsage(ctx);
 		if (!subscriptionRefreshInterval) {
 			subscriptionRefreshInterval = setInterval(() => {
 				requestFooterRender?.();
@@ -871,12 +920,13 @@ export default function customColoredFooter(pi: ExtensionAPI) {
 	pi.on("turn_end", async (_event, ctx) => {
 		lastContext = ctx;
 		requestFooterRender?.();
-		refreshSubscriptionUsage(ctx, true);
+		// Not forced: the shared cache decides whether a network fetch is due.
+		refreshSubscriptionUsage(ctx);
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
 		lastContext = ctx;
-		refreshSubscriptionUsage(ctx, true);
+		refreshSubscriptionUsage(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {
