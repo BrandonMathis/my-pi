@@ -47,6 +47,34 @@ test("Codex requires capacity in both windows and honors blocking flags", () => 
 	assert.equal(codexAvailability(codexData(94.9, 5), "x", 5).available, true);
 });
 
+test("Codex workspace credits count as capacity after subscription windows are exhausted", () => {
+	const exhausted = () => {
+		const data = codexData(0, 100);
+		Object.assign(data.rate_limit, { allowed: false, limit_reached: true });
+		data.credits = { has_credits: true, unlimited: false, overage_limit_reached: false };
+		data.spend_control = { reached: false, individual_limit: { remaining_percent: 94 } };
+		return data;
+	};
+	const result = codexAvailability(exhausted(), "gpt-6.1-sol");
+	assert.equal(result.available, true);
+	assert.match(result.summary, /credits: 94% left/);
+	assert.equal(codexAvailability(exhausted(), "gpt-6.1-sol", 0, false).available, false);
+	assert.equal(codexAvailability(exhausted(), "gpt-6.1-sol", 95).available, false);
+	for (const mutate of [
+		(d) => { d.credits.has_credits = false; },
+		(d) => { d.credits.overage_limit_reached = true; },
+		(d) => { d.spend_control.reached = true; },
+		(d) => { d.spend_control.individual_limit.remaining_percent = 0; },
+		(d) => { delete d.credits; },
+	]) {
+		const data = exhausted();
+		mutate(data);
+		assert.equal(codexAvailability(data, "gpt-6.1-sol").available, false);
+	}
+	// Credits never make malformed/unknown usage look available.
+	assert.equal(codexAvailability({ credits: { has_credits: true } }, "x").status, "unknown");
+});
+
 test("malformed usage never implies available quota", () => {
 	for (const data of [null, {}, [], { rate_limit: {} }, codexData(null), codexData("0"), codexData(NaN), codexData(-1), codexData(101)]) {
 		assert.equal(codexAvailability(data, "x").available, false);

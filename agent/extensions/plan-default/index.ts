@@ -10,6 +10,8 @@ interface Config {
 	anthropicModel: string;
 	minimumRemainingPercent: number;
 	timeoutMs: number;
+	/** Treat remaining Codex workspace credits as capacity once subscription windows run out. */
+	codexUseCredits: boolean;
 }
 
 class ConfigError extends Error {}
@@ -19,6 +21,7 @@ const DEFAULTS: Config = {
 	anthropicModel: "claude-opus-5-5",
 	minimumRemainingPercent: 0,
 	timeoutMs: 5000,
+	codexUseCredits: true,
 };
 
 async function loadConfig(): Promise<Config> {
@@ -34,8 +37,9 @@ async function loadConfig(): Promise<Config> {
 	if (typeof config.codexModel !== "string" || !config.codexModel.trim()
 		|| typeof config.anthropicModel !== "string" || !config.anthropicModel.trim()
 		|| !Number.isFinite(config.minimumRemainingPercent) || config.minimumRemainingPercent < 0 || config.minimumRemainingPercent >= 100
-		|| !Number.isFinite(config.timeoutMs) || config.timeoutMs < 100 || config.timeoutMs > 30000) {
-		throw new ConfigError("Invalid plan-default.json: check model IDs, minimumRemainingPercent (0–99), and timeoutMs (100–30000).");
+		|| !Number.isFinite(config.timeoutMs) || config.timeoutMs < 100 || config.timeoutMs > 30000
+		|| typeof config.codexUseCredits !== "boolean") {
+		throw new ConfigError("Invalid plan-default.json: check model IDs, minimumRemainingPercent (0–99), timeoutMs (100–30000), and codexUseCredits (boolean).");
 	}
 	return config;
 }
@@ -68,7 +72,7 @@ async function checkUsage(ctx: ExtensionContext, provider: string, modelId: stri
 			return { status: "unknown", available: false, summary: `usage unknown (HTTP ${response.status} from usage endpoint, not a confirmed plan limit)` };
 		}
 		const data: unknown = await response.json();
-		return codex ? codexAvailability(data, modelId, config.minimumRemainingPercent)
+		return codex ? codexAvailability(data, modelId, config.minimumRemainingPercent, config.codexUseCredits)
 			: anthropicAvailability(data, modelId, config.minimumRemainingPercent);
 	} catch {
 		// Provider error messages and response bodies may contain credentials.

@@ -25,7 +25,31 @@ function windowsResult(windows: Array<[string, number]>, minimum: number): Avail
 	};
 }
 
-export function codexAvailability(data: unknown, modelId: string, minimum = 0): Availability {
+/**
+ * Codex (Team/Business) workspaces can keep running on workspace credits after
+ * the subscription windows are exhausted. Returns a summary when credits are
+ * usable, or undefined when they are absent, exhausted, or blocked.
+ */
+function codexCredits(payload: RecordValue | undefined, minimum: number): string | undefined {
+	const credits = record(payload?.credits);
+	if (!credits || (credits.has_credits !== true && credits.unlimited !== true)) return undefined;
+	if (credits.overage_limit_reached === true) return undefined;
+	const spend = record(payload?.spend_control);
+	if (spend?.reached === true) return undefined;
+	const limit = record(spend?.individual_limit);
+	const remaining = percentage(limit?.remaining_percent);
+	if (remaining !== undefined) return remaining > minimum ? `credits: ${remaining}% left` : undefined;
+	return credits.unlimited === true ? "credits: unlimited" : "credits available";
+}
+
+export function codexAvailability(data: unknown, modelId: string, minimum = 0, useCredits = true): Availability {
+	const result = codexSubscriptionAvailability(data, modelId, minimum);
+	if (result.status !== "exhausted" || !useCredits) return result;
+	const credits = codexCredits(record(data), minimum);
+	return credits ? { status: "available", available: true, summary: `${result.summary}; using workspace ${credits}` } : result;
+}
+
+function codexSubscriptionAvailability(data: unknown, modelId: string, minimum: number): Availability {
 	const payload = record(data);
 	const limits: Array<[string, RecordValue | undefined]> = [["Codex", record(payload?.rate_limit)]];
 	// Extra limits can belong to unrelated models (e.g. Spark). Only use a

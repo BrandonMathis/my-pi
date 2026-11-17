@@ -4,7 +4,7 @@ Automatically loaded from `~/.pi/agent/extensions/plan-default/index.ts`.
 
 For a fresh Pi session (including `/new`):
 
-1. Use **openai-codex/gpt-6.1-sol** if its subscription usage windows have capacity.
+1. Use **openai-codex/gpt-6.1-sol** if its subscription usage windows have capacity, or (Team/Business workspaces) once those windows are exhausted, if workspace credits remain (`codexUseCredits`).
 2. Otherwise use **anthropic/claude-opus-5-5** if its applicable subscription windows have capacity. If Codex is confirmed exhausted but Anthropic's usage endpoint fails (including HTTP 429), try Anthropic with a usage-unknown warning instead of assuming its plan is exhausted.
 3. If both plans are confirmed exhausted, select **openai-codex/gpt-6.1-sol** as a last resort, with a warning. If neither plan's usage can be checked, retain Codex as the preferred unverified subscription.
 
@@ -34,7 +34,7 @@ Optional `~/.pi/agent/plan-default.json` (or under `PI_CODING_AGENT_DIR`):
 }
 ```
 
-These model defaults match this installation. Change them to model IDs listed in `/model` if needed. Each applicable window must have **more than** `minimumRemainingPercent` left; set it to `5` for a small reserve. `timeoutMs` bounds each usage HTTP request (100–30000 ms); Pi handles OAuth refresh separately. Checks run concurrently.
+These model defaults match this installation. Change them to model IDs listed in `/model` if needed. Each applicable window must have **more than** `minimumRemainingPercent` left; set it to `5` for a small reserve (it also applies to the Codex workspace credit spend limit). Set `codexUseCredits` to `false` to fall back to Anthropic as soon as the Codex subscription windows are exhausted instead of spending workspace credits. `timeoutMs` bounds each usage HTTP request (100–30000 ms); Pi handles OAuth refresh separately. Checks run concurrently.
 
 Codex primary/secondary windows and exact-matching model-specific limits are checked. Anthropic shared, OAuth-app, and matching model-family weekly windows are checked. Unrelated model-specific limits are ignored. The usage endpoints are provider implementation details, so availability checks may need updating if their response formats change.
 
