@@ -5,7 +5,7 @@ Automatically loaded from `~/.pi/agent/extensions/plan-default/index.ts`.
 For a fresh Pi session (including `/new`):
 
 1. Use **openai-codex/gpt-6.1-sol** if its subscription usage windows have capacity, or (Team/Business workspaces) once those windows are exhausted, if workspace credits remain (`codexUseCredits`).
-2. Otherwise use **anthropic/claude-opus-5-5** if its applicable subscription windows have capacity. If Codex is confirmed exhausted but Anthropic's usage endpoint fails (including HTTP 429), try Anthropic with a usage-unknown warning instead of assuming its plan is exhausted.
+2. If Codex is confirmed exhausted (or its subscription login is missing), use **anthropic/claude-opus-5-5** if its applicable subscription windows have capacity. If Codex's usage endpoint fails (e.g. HTTP 503), Codex is kept with a usage-unknown warning rather than switching to Anthropic. If Codex is confirmed exhausted but Anthropic's usage endpoint fails (including HTTP 429), try Anthropic with a usage-unknown warning instead of assuming its plan is exhausted.
 3. If both plans are confirmed exhausted, select **openai-codex/gpt-6.1-sol** as a last resort, with a warning. If neither plan's usage can be checked, retain Codex as the preferred unverified subscription.
 
 The final fallback is the **same Codex subscription**, not the paid `openai` API provider. It cannot bypass a subscription limit. Unknown/unreachable usage is not treated as confirmed capacity. Capacity remaining is not a guarantee that a particular large request will fit.

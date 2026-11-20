@@ -94,10 +94,11 @@ export default function (pi: ExtensionAPI) {
 				checkUsage(ctx, "openai-codex", config.codexModel, config),
 				checkUsage(ctx, "anthropic", config.anthropicModel, config),
 			]);
-			// An unavailable usage endpoint is NOT evidence of exhausted capacity.
-			// Try the unknown Anthropic subscription rather than a known-exhausted Codex plan.
-			const tryAnthropic = !codex.available && (anthropic.available
-				|| (anthropic.status === "unknown" && (codex.status === "exhausted" || codex.status === "unavailable")));
+			// An unavailable usage endpoint is NOT evidence of exhausted capacity:
+			// leave Codex only when it is confirmed exhausted or not logged in.
+			// Then try the unknown Anthropic subscription rather than a known-exhausted Codex plan.
+			const codexBlocked = codex.status === "exhausted" || codex.status === "unavailable";
+			const tryAnthropic = codexBlocked && (anthropic.available || anthropic.status === "unknown");
 			const provider = tryAnthropic ? "anthropic" : "openai-codex";
 			const id = tryAnthropic ? config.anthropicModel : config.codexModel;
 			const selectedUsage = tryAnthropic ? anthropic : codex;

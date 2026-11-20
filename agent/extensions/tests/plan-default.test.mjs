@@ -172,11 +172,13 @@ test("startup selects Codex first, Anthropic second, Codex last", async () => {
 	}
 });
 
-test("unknown or failed usage checks use fallback policy, not an exception", async () => {
-	for (const failure of [401, 403, 429, new Error("secret must not leak"), {}]) {
+test("unknown Codex usage keeps Codex instead of falling back, without throwing", async () => {
+	for (const failure of [401, 403, 429, 503, new Error("secret must not leak"), {}]) {
 		const f = fixture({ codex: failure });
 		await f.start();
-		assert.equal(f.selected[0].provider, "anthropic");
+		assert.equal(f.selected[0].provider, "openai-codex");
+		assert.equal(f.notes[0][1], "warning");
+		assert.match(f.notes[0][0], /usage unknown; trying subscription/);
 		assert.ok(!JSON.stringify(f.notes).includes("secret must not leak"));
 	}
 	const f = fixture({ codex: 500, anthropic: new Error("offline") });
