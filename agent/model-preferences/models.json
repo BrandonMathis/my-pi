@@ -1,0 +1,35 @@
+{
+  "startup": {
+    "codex": "codex-sol",
+    "anthropic": "anthropic-opus"
+  },
+  "models": {
+    "codex-astra": {
+      "provider": "openai-codex",
+      "family": "astra",
+      "shortcuts": ["super+1", "ctrl+alt+1"]
+    },
+    "codex-sol": {
+      "provider": "openai-codex",
+      "family": "sol",
+      "shortcuts": ["super+2", "ctrl+alt+2"]
+    },
+    "codex-luna": {
+      "provider": "openai-codex",
+      "family": "luna",
+      "shortcuts": ["super+3", "ctrl+alt+3"]
+    },
+    "anthropic-opus": {
+      "provider": "anthropic",
+      "family": "opus"
+    },
+    "anthropic-sonnet": {
+      "provider": "anthropic",
+      "family": "sonnet"
+    },
+    "anthropic-haiku": {
+      "provider": "anthropic",
+      "family": "haiku"
+    }
+  }
+}

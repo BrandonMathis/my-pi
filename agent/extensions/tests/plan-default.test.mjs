@@ -1,6 +1,6 @@
 // node --test agent/extensions/tests/plan-default.test.mjs
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,6 +12,7 @@ const packageDir = process.env.PI_PACKAGE_DIR ?? resolve(new URL(`../../install/
 const requirePi = createRequire(join(packageDir, "package.json"));
 const { createJiti } = requirePi("jiti");
 const agentDir = mkdtempSync(join(tmpdir(), "plan-default-test-"));
+cpSync(new URL("../../model-preferences", import.meta.url), join(agentDir, "model-preferences"), { recursive: true });
 const originalDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
 const jiti = createJiti(import.meta.url, {
@@ -140,6 +141,7 @@ function fixture({ codex = codexData(), anthropic = anthropicData(), oauth = tru
 			getHeader: () => ({ parentSession }),
 		},
 		modelRegistry: {
+			getAll: () => models,
 			find: (provider, id) => models.find((model) => model.provider === provider && model.id === id),
 			isUsingOAuth: () => oauth,
 			getProviderAuth: async () => ({ auth: { apiKey: "test-token" } }),
@@ -255,6 +257,41 @@ test("manual command rechecks; current model avoids a redundant selection", asyn
 	assert.equal(f.selected.length, 0);
 	assert.equal(f.requests[0].options.redirect, "error");
 	assert.ok(f.requests[0].options.signal instanceof AbortSignal);
+});
+
+test("startup resolves new Codex and Anthropic releases from the shared policy", async () => {
+	const codex = fixture();
+	codex.ctx.modelRegistry.getAll().push({ provider: "openai-codex", id: "gpt-6.2-sol" });
+	await codex.start();
+	assert.equal(codex.selected[0].id, "gpt-6.2-sol");
+	const anthropic = fixture({ codex: codexData(100) });
+	anthropic.ctx.modelRegistry.getAll().push({ provider: "anthropic", id: "claude-opus-6" });
+	await anthropic.start();
+	assert.equal(anthropic.selected[0].id, "claude-opus-6");
+});
+
+test("legacy explicit model pins still take precedence over latest-family defaults", async () => {
+	const path = join(agentDir, "plan-default.json");
+	try {
+		writeFileSync(path, JSON.stringify({ codexModel: "gpt-6.1-sol" }));
+		const f = fixture();
+		f.ctx.modelRegistry.getAll().push({ provider: "openai-codex", id: "gpt-6.2-sol" });
+		await f.start();
+		assert.equal(f.selected[0].id, "gpt-6.1-sol");
+	} finally { rmSync(path, { force: true }); }
+});
+
+test("invalid shared policy warns without changing models or checking usage", async () => {
+	const path = join(agentDir, "model-preferences", "models.json");
+	const original = readFileSync(path, "utf8");
+	try {
+		writeFileSync(path, "{");
+		const f = fixture();
+		await f.start();
+		assert.equal(f.selected.length, 0);
+		assert.equal(f.requests.length, 0);
+		assert.match(f.notes[0][0], /valid JSON/);
+	} finally { writeFileSync(path, original); }
 });
 
 test("failed model selection reports a warning", async () => {

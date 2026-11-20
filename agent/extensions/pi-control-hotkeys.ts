@@ -1,43 +1,32 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-
-const PROVIDER = "openai-codex";
-// tmux preserves Ctrl/Alt/Shift extended-key modifiers, but not Super.
-const MODEL_SHORTCUTS = [
-	{ shortcuts: ["super+1", "ctrl+alt+1"], name: "Astra" },
-	{ shortcuts: ["super+2", "ctrl+alt+2"], name: "Sol" },
-	{ shortcuts: ["super+3", "ctrl+alt+3"], name: "Luna" },
-] as const;
+import { loadModelPreferences, ModelPreferencesError, resolveModel } from "../model-preferences/index.mjs";
 const THINKING_BACKWARD_SHORTCUT = "ctrl+shift+tab";
 
 export default function piControlHotkeys(pi: ExtensionAPI) {
 	let switching = false;
 
-	async function selectModel(ctx: ExtensionContext, name: string): Promise<void> {
+	async function selectModel(ctx: ExtensionContext, alias: string): Promise<void> {
 		if (switching) return;
 		switching = true;
 
 		try {
-			// Resolve on every press so newly available versions are picked automatically.
-			const candidates = ctx.modelRegistry.getAvailable().flatMap((model) => {
-				if (model.provider !== PROVIDER) return [];
-				const match = /^gpt-(\d+(?:\.\d+)*)-([a-z]+)$/.exec(model.id);
-				if (!match || match[2] !== name.toLowerCase()) return [];
-				return [{ model, version: match[1] }];
-			});
-			candidates.sort((a, b) => b.version.localeCompare(a.version, "en", { numeric: true }));
-			const target = candidates[0]?.model;
+			// Resolve shared preferences on every press, against the live authenticated catalog.
+			const preference = loadModelPreferences(getAgentDir()).models[alias];
+			const target = preference && resolveModel(preference, ctx.modelRegistry.getAvailable());
 			if (!target) {
-				ctx.ui.notify(`No available GPT ${name} models for ${PROVIDER}`, "error");
+				ctx.ui.notify(`No available model for ${alias}; check model-preferences/models.json and /login`, "error");
 				return;
 			}
 
 			if (!(await pi.setModel(target))) {
-				ctx.ui.notify(`No credentials available for ${PROVIDER}/${target.id}`, "error");
+				ctx.ui.notify(`No credentials available for ${target.provider}/${target.id}`, "error");
 				return;
 			}
 
 			ctx.ui.notify(`Model: ${target.id}`, "info");
+		} catch (error) {
+			ctx.ui.notify(error instanceof ModelPreferencesError ? error.message : "Model switch failed; try /model.", "error");
 		} finally {
 			switching = false;
 		}
@@ -58,11 +47,11 @@ export default function piControlHotkeys(pi: ExtensionAPI) {
 		ctx.ui.notify(`Thinking level: ${level}`, "info");
 	}
 
-	for (const model of MODEL_SHORTCUTS) {
-		for (const shortcut of model.shortcuts) {
+	for (const [alias, model] of Object.entries(loadModelPreferences(getAgentDir()).models)) {
+		for (const shortcut of model.shortcuts ?? []) {
 			pi.registerShortcut(shortcut, {
-				description: `Select latest available GPT ${model.name}`,
-				handler: (ctx) => selectModel(ctx, model.name),
+				description: `Select latest available ${model.provider} ${model.family}`,
+				handler: (ctx) => selectModel(ctx, alias),
 			});
 		}
 	}

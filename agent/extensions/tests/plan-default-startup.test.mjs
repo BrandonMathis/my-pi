@@ -1,7 +1,7 @@
 // End-to-end CLI startup tests: fake OAuth credentials, mocked usage HTTP, no model calls.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,11 +12,15 @@ const packageDir = process.env.PI_PACKAGE_DIR ?? fileURLToPath(new URL(`../../in
 const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 const cli = join(packageDir, manifest.bin.pi);
 
-function setup() {
+function setup({ codexAvailable = false } = {}) {
 	const dir = realpathSync(mkdtempSync(join(tmpdir(), "plan-default-startup-")));
 	const agent = join(dir, "agent");
 	mkdirSync(join(agent, "extensions"), { recursive: true });
+	cpSync(new URL("../../model-preferences", import.meta.url), join(agent, "model-preferences"), { recursive: true });
 	symlinkSync(fileURLToPath(new URL("../plan-default", import.meta.url)), join(agent, "extensions", "plan-default"));
+	symlinkSync(fileURLToPath(new URL("../pi-control-hotkeys.ts", import.meta.url)), join(agent, "extensions", "pi-control-hotkeys.ts"));
+	mkdirSync(join(dir, ".pi", "skills"), { recursive: true });
+	symlinkSync(fileURLToPath(new URL("../../../.pi/skills/update-models", import.meta.url)), join(dir, ".pi", "skills", "update-models"));
 	const token = `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fake-account" } })).toString("base64url")}.signature`;
 	writeFileSync(join(agent, "auth.json"), JSON.stringify({
 		"openai-codex": { type: "oauth", access: token, refresh: "fake", expires: Date.now() + 86400000 },
@@ -28,7 +32,7 @@ function setup() {
 	const model = (id, api) => ({ id, name: id, api, reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 8192,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
 	writeFileSync(join(agent, "models.json"), JSON.stringify({ providers: {
-		"openai-codex": { models: [model("gpt-6.1-sol", "openai-codex-responses")] },
+		"openai-codex": { models: [model("gpt-6.1-sol", "openai-codex-responses"), model("gpt-6.2-sol", "openai-codex-responses")] },
 		anthropic: { models: [model("claude-opus-5-5", "anthropic-messages")] },
 	} }));
 	// Install after Pi's HTTP setup using a test-only extension, before the real
@@ -38,8 +42,8 @@ function setup() {
 		globalThis.fetch = async (input) => {
 			const url = String(input);
 			if (url === "https://chatgpt.com/backend-api/wham/usage") {
-				return Response.json({ rate_limit: { allowed: false, limit_reached: true,
-					primary_window: { used_percent: 100, limit_window_seconds: 18000 } } });
+				return Response.json({ rate_limit: { allowed: ${codexAvailable}, limit_reached: ${!codexAvailable},
+					primary_window: { used_percent: ${codexAvailable ? 20 : 100}, limit_window_seconds: 18000 } } });
 			}
 			if (url === "https://api.anthropic.com/api/oauth/usage") return new Response(null, { status: 429 });
 			throw new Error("Network disabled in startup test");
@@ -54,12 +58,14 @@ async function run(f, args = []) {
 	// No ambient credentials or parent-session hints should affect these fixtures.
 	for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "PI_SESSION_ID", "PI_SESSION_FILE", "NODE_OPTIONS"]) delete env[key];
 	const child = spawn(process.execPath, [cli,
-		"--mode", "rpc", "--no-skills", "--no-prompt-templates", ...args], {
+		"--mode", "rpc", "--approve", "--no-prompt-templates", ...args], {
 		cwd: f.dir, env, stdio: ["pipe", "pipe", "pipe"],
 	});
 	let stderr = "";
 	let buffer = "";
 	const notifications = [];
+	let state;
+	let commands;
 	try {
 		return await new Promise((resolveResult, reject) => {
 			const timer = setTimeout(() => reject(new Error(`CLI startup timed out: ${stderr}`)), 15000);
@@ -74,13 +80,16 @@ async function run(f, args = []) {
 					let message;
 					try { message = JSON.parse(line); } catch { continue; }
 					if (message.type === "extension_ui_request" && message.method === "notify") notifications.push(message.message);
-					if (message.id === "state") {
+					if (message.id === "state") state = message.data;
+					if (message.id === "commands") commands = message.data?.commands;
+					if (state && commands) {
 						clearTimeout(timer);
-						resolveResult({ state: message.data, notifications, stderr });
+						resolveResult({ state, commands, notifications, stderr });
 					}
 				}
 			});
 			child.stdin.write(JSON.stringify({ id: "state", type: "get_state" }) + "\n");
+			child.stdin.write(JSON.stringify({ id: "commands", type: "get_commands" }) + "\n");
 		});
 	} finally {
 		child.kill("SIGTERM");
@@ -99,6 +108,17 @@ function savedSession(f) {
 	].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 	return path;
 }
+
+test("real Pi loads the shared hotkeys and project update skill and selects latest Codex on fresh startup", async () => {
+	const f = setup({ codexAvailable: true });
+	try {
+		const result = await run(f);
+		assert.equal(result.state.model.provider, "openai-codex", JSON.stringify(result));
+		assert.equal(result.state.model.id, "gpt-6.2-sol");
+		assert.ok(result.commands.some((command) => command.name === "skill:update-models"), JSON.stringify(result.commands));
+		assert.doesNotMatch(result.stderr, /Failed to load extension|pi-control-hotkeys.*error/i);
+	} finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
 
 test("real Pi auto-discovers the extension and selects Anthropic on fresh startup despite usage HTTP 429", async () => {
 	const f = setup();

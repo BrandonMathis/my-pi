@@ -4,9 +4,9 @@ Automatically loaded from `~/.pi/agent/extensions/plan-default/index.ts`.
 
 For a fresh Pi session (including `/new`):
 
-1. Use **openai-codex/gpt-6.1-sol** if its subscription usage windows have capacity, or (Team/Business workspaces) once those windows are exhausted, if workspace credits remain (`codexUseCredits`).
-2. If Codex is confirmed exhausted (or its subscription login is missing), use **anthropic/claude-opus-5-5** if its applicable subscription windows have capacity. If Codex's usage endpoint fails (e.g. HTTP 503), Codex is kept with a usage-unknown warning rather than switching to Anthropic. If Codex is confirmed exhausted but Anthropic's usage endpoint fails (including HTTP 429), try Anthropic with a usage-unknown warning instead of assuming its plan is exhausted.
-3. If both plans are confirmed exhausted, select **openai-codex/gpt-6.1-sol** as a last resort, with a warning. If neither plan's usage can be checked, retain Codex as the preferred unverified subscription.
+1. Use the **latest Codex Sol** from the shared model preferences if its subscription usage windows have capacity, or (Team/Business workspaces) once those windows are exhausted, if workspace credits remain (`codexUseCredits`).
+2. If Codex is confirmed exhausted (or its subscription login is missing), use the **latest Anthropic Opus** from the shared model preferences if its applicable subscription windows have capacity. If Codex's usage endpoint fails (e.g. HTTP 503), Codex is kept with a usage-unknown warning rather than switching to Anthropic. If Codex is confirmed exhausted but Anthropic's usage endpoint fails (including HTTP 429), try Anthropic with a usage-unknown warning instead of assuming its plan is exhausted.
+3. If both plans are confirmed exhausted, select the **same latest Codex Sol** as a last resort, with a warning. If neither plan's usage can be checked, retain Codex as the preferred unverified subscription.
 
 The final fallback is the **same Codex subscription**, not the paid `openai` API provider. It cannot bypass a subscription limit. Unknown/unreachable usage is not treated as confirmed capacity. Capacity remaining is not a guarantee that a particular large request will fit.
 
@@ -23,18 +23,19 @@ Both providers must be connected through Pi's `/login` subscription flow. The ex
 
 ## Configuration
 
-Optional `~/.pi/agent/plan-default.json` (or under `PI_CODING_AGENT_DIR`):
+Model families and hotkeys live in [`../../model-preferences/models.json`](../../model-preferences/models.json). The shared resolver selects the newest stable catalog model per family; see the [maintenance guide](../../model-preferences/README.md) or run `/skill:update-models` from this repository. No model IDs are hardcoded in this extension.
+
+Optional quota settings in `~/.pi/agent/plan-default.json` (or under `PI_CODING_AGENT_DIR`):
 
 ```json
 {
-  "codexModel": "gpt-6.1-sol",
-  "anthropicModel": "claude-opus-5-5",
   "minimumRemainingPercent": 0,
-  "timeoutMs": 5000
+  "timeoutMs": 5000,
+  "codexUseCredits": true
 }
 ```
 
-These model defaults match this installation. Change them to model IDs listed in `/model` if needed. Each applicable window must have **more than** `minimumRemainingPercent` left; set it to `5` for a small reserve (it also applies to the Codex workspace credit spend limit). Set `codexUseCredits` to `false` to fall back to Anthropic as soon as the Codex subscription windows are exhausted instead of spending workspace credits. `timeoutMs` bounds each usage HTTP request (100–30000 ms); Pi handles OAuth refresh separately. Checks run concurrently.
+Legacy explicit `codexModel` and `anthropicModel` fields are still accepted as exact-ID overrides. Omit them to follow the shared latest-family preferences; intentional pins will prevent automatic model upgrades. Each applicable window must have **more than** `minimumRemainingPercent` left; set it to `5` for a small reserve (it also applies to the Codex workspace credit spend limit). Set `codexUseCredits` to `false` to fall back to Anthropic as soon as the Codex subscription windows are exhausted instead of spending workspace credits. `timeoutMs` bounds each usage HTTP request (100–30000 ms); Pi handles OAuth refresh separately. Checks run concurrently.
 
 Codex primary/secondary windows and exact-matching model-specific limits are checked. Anthropic shared, OAuth-app, and matching model-family weekly windows are checked. Unrelated model-specific limits are ignored. The usage endpoints are provider implementation details, so availability checks may need updating if their response formats change.
 

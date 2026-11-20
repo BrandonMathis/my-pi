@@ -5,11 +5,19 @@
 !.gitignore
 !/AGENTS.md
 
-# Keep only agent extensions tracked
+# Keep shared Pi configuration, extensions, and the project model-update skill tracked
+!/.pi/
+.pi/*
+!.pi/skills/
+.pi/skills/*
+!.pi/skills/update-models/
+!.pi/skills/update-models/**
 !agent/
 agent/*
 !agent/settings.json
 !agent/keybindings.json
+!agent/model-preferences/
+!agent/model-preferences/**
 !agent/extensions/
 !agent/extensions/**
 

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { anthropicAvailability, codexAccountId, codexAvailability, hasExplicitModel, type Availability } from "./usage.ts";
+import { loadModelPreferences, ModelPreferencesError, resolveModel } from "../../model-preferences/index.mjs";
 
 interface Config {
 	codexModel: string;
@@ -16,24 +17,31 @@ interface Config {
 
 class ConfigError extends Error {}
 
-const DEFAULTS: Config = {
-	codexModel: "gpt-6.1-sol",
-	anthropicModel: "claude-opus-5-5",
+const DEFAULTS = {
 	minimumRemainingPercent: 0,
 	timeoutMs: 5000,
 	codexUseCredits: true,
 };
 
-async function loadConfig(): Promise<Config> {
+async function loadConfig(ctx: ExtensionContext): Promise<Config> {
+	const preferences = loadModelPreferences(getAgentDir());
+	const models = ctx.modelRegistry.getAll();
+	const codex = preferences.models[preferences.startup.codex];
+	const anthropic = preferences.models[preferences.startup.anthropic];
+	const defaults: Config = {
+		...DEFAULTS,
+		codexModel: resolveModel(codex, models)?.id ?? `latest ${codex.family}`,
+		anthropicModel: resolveModel(anthropic, models)?.id ?? `latest ${anthropic.family}`,
+	};
 	let input: Partial<Config>;
 	try {
 		input = JSON.parse(await readFile(join(getAgentDir(), "plan-default.json"), "utf8"));
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULTS };
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaults;
 		throw new ConfigError("Cannot read plan-default.json; check that it contains valid JSON.");
 	}
 	if (!input || typeof input !== "object" || Array.isArray(input)) throw new ConfigError("Invalid plan-default.json.");
-	const config = { ...DEFAULTS, ...input };
+	const config = { ...defaults, ...input };
 	if (typeof config.codexModel !== "string" || !config.codexModel.trim()
 		|| typeof config.anthropicModel !== "string" || !config.anthropicModel.trim()
 		|| !Number.isFinite(config.minimumRemainingPercent) || config.minimumRemainingPercent < 0 || config.minimumRemainingPercent >= 100
@@ -89,7 +97,7 @@ export default function (pi: ExtensionAPI) {
 
 	async function select(ctx: ExtensionContext) {
 		try {
-			const config = await loadConfig();
+			const config = await loadConfig(ctx);
 			const [codex, anthropic] = await Promise.all([
 				checkUsage(ctx, "openai-codex", config.codexModel, config),
 				checkUsage(ctx, "anthropic", config.anthropicModel, config),
@@ -120,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 				fallback || unverified ? "warning" : "info",
 			);
 		} catch (error) {
-			if (ctx.hasUI) ctx.ui.notify(error instanceof ConfigError ? error.message : "Plan default selection failed; current model may be unchanged.", "warning");
+			if (ctx.hasUI) ctx.ui.notify(error instanceof ConfigError || error instanceof ModelPreferencesError ? error.message : "Plan default selection failed; current model may be unchanged.", "warning");
 		}
 	}
 
